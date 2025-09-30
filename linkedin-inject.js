@@ -9,15 +9,26 @@ const browserApi = typeof browser !== "undefined" ? browser : chrome;
       return;
     }
 
-    const titleField = await waitForTitleField();
+    const [titleField, bodyField] = await Promise.all([
+      waitForTitleField(),
+      waitForBodyField()
+    ]);
+
     if (!titleField) {
       console.error("POSSE: Could not locate LinkedIn article title input.");
       return;
     }
 
     stageTitle(titleField, response.title || response.sourceUrl || "");
+
+    if (!bodyField) {
+      console.error("POSSE: Could not locate LinkedIn article body editor.");
+      return;
+    }
+
+    stageBody(bodyField, response.bodyHtml || "", response.sourceUrl || "");
   } catch (error) {
-    console.error("POSSE: Failed to inject LinkedIn title", error);
+    console.error("POSSE: Failed to inject LinkedIn content", error);
   }
 })();
 
@@ -29,6 +40,31 @@ function waitForTitleField(maxAttempts = 40, delayMs = 250) {
       const candidate = document.querySelector("#article-editor-headline__textarea");
 
       if (candidate instanceof HTMLTextAreaElement) {
+        resolve(candidate);
+        return;
+      }
+
+      attempts += 1;
+      if (attempts >= maxAttempts) {
+        resolve(null);
+        return;
+      }
+
+      setTimeout(lookup, delayMs);
+    };
+
+    lookup();
+  });
+}
+
+function waitForBodyField(maxAttempts = 40, delayMs = 250) {
+  return new Promise((resolve) => {
+    let attempts = 0;
+
+    const lookup = () => {
+      const candidate = document.querySelector('[data-test-article-editor-content-textbox]');
+
+      if (candidate && candidate instanceof HTMLElement && candidate.isContentEditable) {
         resolve(candidate);
         return;
       }
@@ -76,4 +112,86 @@ function dispatchTitleEvents(element, title) {
   }
 
   element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function stageBody(element, html, fallbackText) {
+  const finalHtml = formatBodyHtml(html, fallbackText);
+  if (!finalHtml) {
+    console.warn("POSSE: No article body HTML provided, skipping body injection.");
+    return;
+  }
+
+  focusBody(element);
+  replaceBodyContent(element, finalHtml);
+  dispatchBodyEvents(element, finalHtml);
+}
+
+function focusBody(element) {
+  element.focus({ preventScroll: false });
+  element.dispatchEvent(new Event("focus", { bubbles: true }));
+}
+
+function replaceBodyContent(element, html) {
+  const hasSelection = selectAllIn(element);
+
+  let inserted = false;
+  if (hasSelection && typeof document.execCommand === "function") {
+    try {
+      inserted = document.execCommand("insertHTML", false, html);
+    } catch (error) {
+      inserted = false;
+    }
+  }
+
+  if (!inserted) {
+    element.innerHTML = html;
+  }
+}
+
+function selectAllIn(element) {
+  const selection = window.getSelection();
+  if (!selection) {
+    return false;
+  }
+
+  selection.removeAllRanges();
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  selection.addRange(range);
+  return true;
+}
+
+function dispatchBodyEvents(element, html) {
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  try {
+    element.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      cancelable: true,
+      data: html,
+      inputType: "insertHTML"
+    }));
+  } catch (error) {
+    // Some browsers may not support constructing InputEvent.
+  }
+
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function formatBodyHtml(html, fallbackText) {
+  const trimmed = typeof html === "string" ? html.trim() : "";
+  if (trimmed) {
+    return trimmed;
+  }
+
+  const fallback = typeof fallbackText === "string" ? fallbackText.trim() : "";
+  if (!fallback) {
+    return "";
+  }
+
+  const escaped = fallback
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  return `<p>${escaped}</p>`;
 }
