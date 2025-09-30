@@ -1,0 +1,24 @@
+{
+  "manifest_version": 2,
+  "name": "POSSE",
+  "description": "Grab the current page URL and stage it in Discord for syndication.",
+  "version": "0.1.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "posse@example.com"
+    }
+  },
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "storage",
+    "https://discord.com/*"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "browser_action": {
+    "default_title": "Send to Discord"
+  }
+}
