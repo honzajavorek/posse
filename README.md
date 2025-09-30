@@ -34,6 +34,30 @@ The extension icon (default puzzle-piece) will appear in your toolbar. Pin it if
 3. A new tab opens with the specified Discord channel.
 4. Once the page finishes loading, the message box will be populated with your blog post URL. Review and press Enter (or click Send) when ready.
 
+## Local Development with `web-ext`
+
+If you iterate on the code frequently, Mozilla's [`web-ext`](https://extensionworkshop.com/documentation/develop/web-ext-command-reference/) CLI can auto-reload the extension as you save changes.
+
+### 1. Install `web-ext`
+
+```bash
+npm install --global web-ext
+```
+
+### 2. Run the extension with live reloading
+
+From the project root:
+
+```bash
+web-ext run --target=firefox-desktop --firefox="$(ls -1 /Applications/Firefox.app/Contents/MacOS/firefox)"
+```
+
+`web-ext` launches a dedicated Firefox profile, installs the extension, and watches this directory. Each time you edit a file, it automatically reloads the extension—no need to revisit `about:debugging`.
+
+### 3. Stop the session
+
+Press `Ctrl+C` in the terminal to shut down the `web-ext` runner. Firefox closes along with it, leaving your main profile untouched.
+
 ## Notes & Limitations
 
 - The extension relies on Discord's current DOM structure (the message composer must expose a `[role="textbox"]` element). If Discord updates their interface, the selector may need adjustment.
