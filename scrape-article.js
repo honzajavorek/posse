@@ -174,7 +174,7 @@
     });
   }
 
-  function readImageDataUrl(imageElement) {
+  function readImageDataUrl(imageElement, absoluteUrl) {
     if (!imageElement) {
       return null;
     }
@@ -182,23 +182,87 @@
     const width = imageElement.naturalWidth;
     const height = imageElement.naturalHeight;
 
-    if (!width || !height) {
+    if (width && height) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (context) {
+          context.drawImage(imageElement, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL();
+          if (dataUrl) {
+            return dataUrl;
+          }
+        }
+      } catch (error) {
+        // Drawing may fail if the image taints the canvas.
+      }
+    }
+
+    return fetchImageAsDataUrl(absoluteUrl);
+  }
+
+  function fetchImageAsDataUrl(absoluteUrl) {
+    try {
+      if (!absoluteUrl) {
+        return null;
+      }
+
+      const request = new XMLHttpRequest();
+      request.open('GET', absoluteUrl, false);
+      request.responseType = 'arraybuffer';
+      request.send(null);
+
+      if (request.status < 200 || request.status >= 300) {
+        return null;
+      }
+
+      const buffer = request.response;
+      if (!buffer) {
+        return null;
+      }
+
+      const bytes = new Uint8Array(buffer);
+      const chunkSize = 0x8000;
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const chunk = bytes.subarray(offset, offset + chunkSize);
+        binary += String.fromCharCode.apply(null, chunk);
+      }
+
+      const base64 = btoa(binary);
+      const contentType = request.getResponseHeader('content-type') || 'application/octet-stream';
+      return `data:${contentType};base64,${base64}`;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function inferMimeTypeFromDataUrl(dataUrl) {
+    if (!dataUrl) {
+      return null;
+    }
+    const match = /^data:([^;,]+)[;,]/i.exec(dataUrl);
+    return match && match[1] ? match[1] : null;
+  }
+
+  function deriveFileNameFromUrl(url) {
+    if (!url) {
       return null;
     }
 
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const context = canvas.getContext('2d');
-      if (!context) {
-        return null;
+      const parsed = new URL(url, baseUrl);
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      if (parts.length) {
+        return parts[parts.length - 1];
       }
-      context.drawImage(imageElement, 0, 0, width, height);
-      return canvas.toDataURL();
     } catch (error) {
       return null;
     }
+
+    return null;
   }
 
   function extractCoverImage(articleBody, articleClone, coverImageUrlAbsolute) {
@@ -252,7 +316,9 @@
 
     removalTarget.remove();
 
-    const dataUrl = readImageDataUrl(originalImage);
+    const dataUrl = readImageDataUrl(originalImage, coverImageUrlAbsolute);
+    const mimeType = inferMimeTypeFromDataUrl(dataUrl);
+    const fileName = deriveFileNameFromUrl(coverImageUrlAbsolute);
 
     return {
       url: coverImageUrlAbsolute,
@@ -260,7 +326,9 @@
       caption: captionText,
       width: originalImage.naturalWidth || null,
       height: originalImage.naturalHeight || null,
-      dataUrl: dataUrl || null
+      dataUrl: dataUrl || null,
+      mimeType: mimeType || null,
+      fileName: fileName || null
     };
   }
 
