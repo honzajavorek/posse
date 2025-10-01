@@ -322,18 +322,59 @@ async function stageCoverImage(coverImage) {
 
     logStep("Cover uploader root located.");
 
-    const input = await waitForCoverFileInput(uploaderRoot);
+    const editorModal = await waitForCoverEditorModal({ timeoutMs: 4500 });
+    if (editorModal) {
+      logStep("Cover editor modal located while preparing for file input search.");
+    }
+
+    const input = await waitForCoverFileInput([uploaderRoot, editorModal]);
     if (!input) {
       logStep("Cover file input not found after button activation.", "", "warn");
       return;
     }
 
-    logStep("Cover file input available after activation.");
-    logStep("Cover staging paused awaiting file selection. Canceling faux dialog.");
-
+    logStep("Cover file input available after activation.", describeElement(input));
     preventPendingFileDialog(input);
 
-    logStep("Cover file input ready for injection stage.");
+    let file = await buildCoverFile(coverImage);
+    if (!file) {
+      logStep("Unable to construct cover image file payload.", "", "warn");
+      return;
+    }
+
+    logStep("Cover image file prepared.", {
+      name: file.name,
+      type: file.type,
+      size: file.size
+    });
+
+    file = await ensureCoverFileCompatibility(file, coverImage);
+    if (!file) {
+      logStep("Cover image file could not be normalized for LinkedIn.", "", "warn");
+      return;
+    }
+
+    logStep("Cover image file normalized.", {
+      name: file.name,
+      type: file.type,
+      size: file.size
+    });
+
+    const injected = await injectFileIntoInput(input, file);
+    if (!injected) {
+      logStep("Cover image injection via file input failed.", "", "warn");
+      return;
+    }
+
+    logStep("Cover image injected into file input.");
+
+    const preview = await waitForCoverPreview(uploaderRoot, { timeoutMs: 8000 });
+    if (preview) {
+      logStep("Cover image preview detected after file input injection.");
+      await applyCoverMetadata(coverImage, uploaderRoot, preview);
+    } else {
+      logStep("Cover preview not detected after file input injection.", "", "warn");
+    }
   } catch (error) {
     logStep("Failed to stage cover image", error, "error");
   }
@@ -401,7 +442,7 @@ async function waitForCoverDropTarget(root, { timeoutMs = 6000, intervalMs = 120
   return null;
 }
 
-async function waitForCoverFileInput(root, { timeoutMs = 5000, intervalMs = 120 } = {}) {
+async function waitForCoverFileInput(rootOrRoots, { timeoutMs = 5000, intervalMs = 120 } = {}) {
   const deadline = Date.now() + timeoutMs;
   const selectors = [
     'input[type="file"][accept*="image"]',
@@ -411,12 +452,36 @@ async function waitForCoverFileInput(root, { timeoutMs = 5000, intervalMs = 120 
     'input[type="file"]'
   ];
 
+  const normalizeScope = (candidate) => (
+    candidate && typeof candidate.querySelector === "function" ? candidate : null
+  );
+
+  const scopes = new Set();
+  if (Array.isArray(rootOrRoots)) {
+    for (const candidate of rootOrRoots) {
+      const scope = normalizeScope(candidate);
+      if (scope) {
+        scopes.add(scope);
+      }
+    }
+  } else {
+    const scope = normalizeScope(rootOrRoots);
+    if (scope) {
+      scopes.add(scope);
+    }
+  }
+
   while (Date.now() <= deadline) {
-    const scope = root && typeof root.querySelector === "function" ? root : document;
-    for (const selector of selectors) {
-      const candidate = scope.querySelector(selector);
-      if (candidate instanceof HTMLInputElement) {
-        return candidate;
+    const activeScopes = scopes.size ? Array.from(scopes) : [];
+    activeScopes.push(document);
+
+    for (const scope of activeScopes) {
+      const queryRoot = scope && typeof scope.querySelector === "function" ? scope : document;
+      for (const selector of selectors) {
+        const candidate = queryRoot.querySelector(selector);
+        if (candidate instanceof HTMLInputElement && candidate.isConnected) {
+          return candidate;
+        }
       }
     }
 
@@ -970,6 +1035,73 @@ function preventPendingFileDialog(input) {
   } catch (error) {
     // Ignore inability to override click on element instance.
   }
+}
+
+async function injectFileIntoInput(input, file) {
+  if (!(input instanceof HTMLInputElement) || !file) {
+    return false;
+  }
+
+  try {
+    const files = buildFileList([file]);
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "files")?.set;
+    if (setter) {
+      setter.call(input, files);
+    } else {
+      input.files = files;
+    }
+
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    logStep("Dispatched input/change events for cover file input.");
+    return true;
+  } catch (error) {
+    logStep("Failed to inject file into input.", error, "warn");
+    return false;
+  }
+}
+
+function buildFileList(files) {
+  if (typeof DataTransfer === "function") {
+    const transfer = new DataTransfer();
+    for (const file of files) {
+      transfer.items.add(file);
+    }
+    return transfer.files;
+  }
+
+  if (typeof FileList !== "undefined") {
+    try {
+      const dataTransfer = document.createElement("input");
+      dataTransfer.type = "file";
+      const dt = new ClipboardEvent("").clipboardData || new DataTransfer();
+      for (const file of files) {
+        dt.items.add(file);
+      }
+      return dt.files;
+    } catch (error) {
+      // fall through to shim
+    }
+  }
+
+  const list = {
+    length: files.length,
+    item(index) {
+      return files[index] || null;
+    }
+  };
+
+  let index = 0;
+  for (const file of files) {
+    Object.defineProperty(list, index, {
+      configurable: true,
+      enumerable: true,
+      value: file
+    });
+    index += 1;
+  }
+
+  return list;
 }
 
 async function simulateCoverDrop(target, file) {
