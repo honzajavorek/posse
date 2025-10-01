@@ -18,6 +18,7 @@ const browserApi = typeof browser !== "undefined" ? browser : chrome;
 
     const preferredTitle = response.title || response.sourceUrl || "";
     const preparedBodyHtml = resolveBodyHtml(response.bodyHtml || "", response.sourceUrl || "");
+    const preparedBodyText = extractPlainText(preparedBodyHtml);
 
     stageTitle(titleField, preferredTitle);
 
@@ -26,31 +27,21 @@ const browserApi = typeof browser !== "undefined" ? browser : chrome;
       return;
     }
 
-    await delay(750);
+    const hydratedBodyField = await waitForHydratedBodyField();
 
-    let bodyField = await waitForBodyField();
-    if (!bodyField) {
-      console.error("POSSE: Could not locate LinkedIn article body editor.");
+    if (!hydratedBodyField) {
+      console.error("POSSE: Could not locate a stable LinkedIn article body editor.");
       return;
     }
 
-    let injected = stageBody(bodyField, preparedBodyHtml);
+    const injected = stageBody(hydratedBodyField, preparedBodyHtml, preparedBodyText, true);
 
     if (!injected) {
-      await delay(500);
-      bodyField = await waitForBodyField();
-      if (!bodyField) {
-        console.error("POSSE: Could not re-locate LinkedIn article body editor after retry.");
-        return;
-      }
-      injected = stageBody(bodyField, preparedBodyHtml);
+      console.warn("POSSE: LinkedIn body editor rejected injected content.");
+      return;
     }
 
-    if (injected) {
-      ensureBodyPersistence(preparedBodyHtml);
-    } else {
-      console.warn("POSSE: LinkedIn body editor rejected injected content.");
-    }
+    maintainBodyContent(preparedBodyHtml, preparedBodyText);
   } catch (error) {
     console.error("POSSE: Failed to inject LinkedIn content", error);
   }
@@ -138,14 +129,23 @@ function dispatchTitleEvents(element, title) {
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function stageBody(element, html) {
+function stageBody(element, html, plainText, allowSimulatedPaste = true) {
   const trimmed = typeof html === "string" ? html.trim() : "";
-  if (!trimmed) {
+  if (!trimmed || !element) {
     return false;
   }
 
   focusBody(element);
-  replaceBodyContent(element, trimmed);
+
+  let inserted = false;
+  if (allowSimulatedPaste) {
+    inserted = simulatePaste(element, trimmed, plainText);
+  }
+
+  if (!inserted || !hasBodyContent(element)) {
+    replaceBodyContent(element, trimmed);
+  }
+
   dispatchBodyEvents(element, trimmed);
 
   return hasBodyContent(element);
@@ -221,44 +221,205 @@ function resolveBodyHtml(html, fallbackText) {
   return `<p>${escaped}</p>`;
 }
 
-function ensureBodyPersistence(html, attemptsLeft = 3, initialDelay = 800) {
-  if (!html || attemptsLeft <= 0) {
-    return;
-  }
-
-  setTimeout(async () => {
-    const candidate = await waitForBodyField(10, 200);
-    if (!candidate) {
-      ensureBodyPersistence(html, attemptsLeft - 1, initialDelay + 300);
-      return;
-    }
-
-    if (!hasBodyContent(candidate)) {
-      const injected = stageBody(candidate, html);
-      if (!injected) {
-        ensureBodyPersistence(html, attemptsLeft - 1, initialDelay + 300);
-        return;
-      }
-    }
-
-    // Verify once more later to guard against late re-renders.
-    ensureBodyPersistence(html, attemptsLeft - 1, initialDelay + 300);
-  }, initialDelay);
-}
-
 function hasBodyContent(element) {
   if (!element || !element.isConnected) {
     return false;
   }
-  if (element.innerHTML && element.innerHTML.trim()) {
+  const textContent = element.textContent ? element.textContent.trim() : "";
+  if (textContent) {
     return true;
   }
-  if (element.textContent && element.textContent.trim()) {
+
+  const hasRichNodes = element.querySelector("img, video, iframe, figure, blockquote, ul, ol, table, pre, code, hr, embed, object");
+  if (hasRichNodes) {
     return true;
   }
+
   return false;
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function waitForHydratedBodyField(options = {}) {
+  const bodyField = await waitForBodyField();
+  if (!bodyField) {
+    return null;
+  }
+
+  const stableField = await waitForBodyStability(bodyField, options);
+  if (stableField && stableField.isConnected) {
+    return stableField;
+  }
+
+  const latest = document.querySelector('[data-test-article-editor-content-textbox]');
+  return latest && latest instanceof HTMLElement && latest.isContentEditable ? latest : null;
+}
+
+function waitForBodyStability(initialField, { idleMs = 700, timeoutMs = 8000 } = {}) {
+  return new Promise((resolve) => {
+    if (!initialField) {
+      resolve(null);
+      return;
+    }
+
+    let resolved = false;
+    let latestField = initialField;
+    let lastMutation = Date.now();
+
+    const updateLatest = () => {
+      const current = document.querySelector('[data-test-article-editor-content-textbox]');
+      if (current && current instanceof HTMLElement && current.isContentEditable) {
+        latestField = current;
+      }
+      lastMutation = Date.now();
+    };
+
+    updateLatest();
+
+    const observer = new MutationObserver((records) => {
+      let relevant = false;
+      for (const record of records) {
+        if (record.target instanceof Element && record.target.closest('[data-test-article-editor-content-textbox]')) {
+          relevant = true;
+          break;
+        }
+        for (const node of record.addedNodes) {
+          if (node instanceof Element && node.matches('[data-test-article-editor-content-textbox]')) {
+            relevant = true;
+            break;
+          }
+        }
+        if (relevant) {
+          break;
+        }
+      }
+      if (relevant) {
+        updateLatest();
+      }
+    });
+
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true
+    });
+
+    const intervalId = setInterval(() => {
+      if (resolved) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastMutation >= idleMs) {
+        resolved = true;
+        clearInterval(intervalId);
+        observer.disconnect();
+        resolve(latestField && latestField.isConnected ? latestField : document.querySelector('[data-test-article-editor-content-textbox]'));
+      }
+    }, Math.min(150, idleMs));
+
+    setTimeout(() => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      clearInterval(intervalId);
+      observer.disconnect();
+      resolve(latestField && latestField.isConnected ? latestField : document.querySelector('[data-test-article-editor-content-textbox]'));
+    }, timeoutMs);
+  });
+}
+
+function simulatePaste(element, html, plainText) {
+  if (typeof ClipboardEvent !== "function" || typeof DataTransfer !== "function") {
+    return false;
+  }
+
+  try {
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData("text/html", html);
+    if (plainText) {
+      dataTransfer.setData("text/plain", plainText);
+    }
+
+    const pasteEvent = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true
+    });
+
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: dataTransfer,
+      writable: false
+    });
+
+    const dispatched = element.dispatchEvent(pasteEvent);
+    return dispatched;
+  } catch (error) {
+    return false;
+  }
+}
+
+function extractPlainText(html) {
+  if (!html) {
+    return "";
+  }
+
+  const scratch = document.createElement("div");
+  scratch.innerHTML = html;
+  const text = scratch.textContent || "";
+  return text.trim();
+}
+
+function maintainBodyContent(html, plainText, { durationMs = 12000 } = {}) {
+  if (!html) {
+    return;
+  }
+
+  let active = true;
+  let observer = null;
+
+  const stop = () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    if (observer) {
+      observer.disconnect();
+    }
+    document.removeEventListener("input", onUserInput, true);
+  };
+
+  const onUserInput = (event) => {
+    if (!event || !event.target) {
+      return;
+    }
+    if (event.target instanceof Element && event.target.closest('[data-test-article-editor-content-textbox]')) {
+      stop();
+    }
+  };
+
+  document.addEventListener("input", onUserInput, true);
+
+  const tryRestoreBody = (markup, textFallback, allowPaste) => {
+    const field = document.querySelector('[data-test-article-editor-content-textbox]');
+    if (!field || hasBodyContent(field)) {
+      return;
+    }
+    stageBody(field, markup, textFallback, allowPaste);
+  };
+
+  observer = new MutationObserver(() => {
+    if (!active) {
+      return;
+    }
+    tryRestoreBody(html, plainText, false);
+  });
+
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+
+  setTimeout(() => {
+    stop();
+  }, durationMs);
+
+  setTimeout(() => tryRestoreBody(html, plainText, false), 150);
+  setTimeout(() => tryRestoreBody(html, plainText, false), 600);
+  setTimeout(() => tryRestoreBody(html, plainText, false), 1400);
 }
