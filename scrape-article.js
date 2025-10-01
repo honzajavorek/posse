@@ -25,6 +25,18 @@
   const currentUrl = ensureBlogUrl(window.location.href);
   const baseUrl = currentUrl.href;
 
+  function toAbsoluteUrl(url) {
+    if (!url) {
+      return "";
+    }
+
+    try {
+      return new URL(url, baseUrl).href;
+    } catch (error) {
+      return "";
+    }
+  }
+
   function getCanonicalUrl() {
     const canonical = document.querySelector('link[rel="canonical"][href]');
     if (canonical && canonical.href) {
@@ -32,6 +44,20 @@
     }
 
     return currentUrl.href;
+  }
+
+  function getOgImageUrl() {
+    const ogImage = document.querySelector('meta[property="og:image"][content]');
+    if (!ogImage || !ogImage.content) {
+      throw new Error("POSSE: Unable to locate og:image metadata on the blog page.");
+    }
+
+    const absolute = toAbsoluteUrl(ogImage.content);
+    if (!absolute) {
+      throw new Error("POSSE: Unable to resolve og:image to an absolute URL.");
+    }
+
+    return absolute;
   }
 
   function getArticleRoot() {
@@ -148,17 +174,111 @@
     });
   }
 
+  function readImageDataUrl(imageElement) {
+    if (!imageElement) {
+      return null;
+    }
+
+    const width = imageElement.naturalWidth;
+    const height = imageElement.naturalHeight;
+
+    if (!width || !height) {
+      return null;
+    }
+
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+      context.drawImage(imageElement, 0, 0, width, height);
+      return canvas.toDataURL();
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function extractCoverImage(articleBody, articleClone, coverImageUrlAbsolute) {
+    const originalImages = Array.from(articleBody.querySelectorAll('img'));
+    const cloneImages = Array.from(articleClone.querySelectorAll('img'));
+
+    if (!originalImages.length || !cloneImages.length) {
+      throw new Error("POSSE: Unable to find any images in the article body.");
+    }
+
+    const firstOriginalSrc = originalImages[0].getAttribute('src');
+    const firstOriginalAbsolute = firstOriginalSrc ? toAbsoluteUrl(firstOriginalSrc) : "";
+
+    if (!firstOriginalAbsolute || firstOriginalAbsolute !== coverImageUrlAbsolute) {
+      throw new Error("POSSE: First article image does not match og:image.");
+    }
+
+    let matchIndex = -1;
+    for (let index = 0; index < originalImages.length; index += 1) {
+      const originalSrc = originalImages[index].getAttribute('src');
+      if (!originalSrc) {
+        continue;
+      }
+      const candidateAbsolute = toAbsoluteUrl(originalSrc);
+      if (candidateAbsolute && candidateAbsolute === coverImageUrlAbsolute) {
+        matchIndex = index;
+        break;
+      }
+    }
+
+    if (matchIndex === -1) {
+      throw new Error("POSSE: The first large image in the article does not match og:image.");
+    }
+
+    const originalImage = originalImages[matchIndex];
+    const cloneImage = cloneImages[matchIndex];
+
+    if (!originalImage || !cloneImage) {
+      throw new Error("POSSE: Unable to resolve cover image elements for removal.");
+    }
+
+    const removalTarget = cloneImage.closest('figure') || cloneImage.closest('picture') || cloneImage.parentElement;
+
+    if (!removalTarget) {
+      throw new Error("POSSE: Unable to determine how to remove the cover image from the article body.");
+    }
+
+    const captionElement = removalTarget.querySelector('figcaption');
+    const captionText = captionElement ? captionElement.textContent.trim() : '';
+    const altText = cloneImage.getAttribute('alt') ? cloneImage.getAttribute('alt').trim() : '';
+
+    removalTarget.remove();
+
+    const dataUrl = readImageDataUrl(originalImage);
+
+    return {
+      url: coverImageUrlAbsolute,
+      alt: altText,
+      caption: captionText,
+      width: originalImage.naturalWidth || null,
+      height: originalImage.naturalHeight || null,
+      dataUrl: dataUrl || null
+    };
+  }
+
   const articleElement = getArticleRoot();
   const articleBody = getArticleBody(articleElement);
   const articleClone = articleBody.cloneNode(true);
+  const coverImageUrlAbsolute = getOgImageUrl();
 
   sanitizeClone(articleClone);
   convertAdmonitionsToBlockquotes(articleClone);
   stripLinksFromFigureCaptions(articleClone);
 
+  const coverImage = extractCoverImage(articleBody, articleClone, coverImageUrlAbsolute);
+
   return {
     url: getCanonicalUrl(),
     title: getArticleTitle(articleElement),
-    bodyHtml: articleClone.innerHTML
+    bodyHtml: articleClone.innerHTML,
+    coverImage
   };
 })();

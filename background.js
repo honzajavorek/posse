@@ -61,7 +61,7 @@ browserApi.browserAction.onClicked.addListener(async (activeTab) => {
       throw validationError;
     }
 
-    let scraped = { url: tabDetails ? tabDetails.url : undefined, title: tabDetails ? tabDetails.title : undefined, bodyHtml: "" };
+    let scraped = { url: tabDetails ? tabDetails.url : undefined, title: tabDetails ? tabDetails.title : undefined, bodyHtml: "", coverImage: null };
 
     if (tabDetails && typeof tabDetails.id === "number") {
       try {
@@ -73,11 +73,23 @@ browserApi.browserAction.onClicked.addListener(async (activeTab) => {
           scraped = {
             url: typeof result.url === "string" && result.url ? result.url : scraped.url,
             title: typeof result.title === "string" && result.title ? result.title : scraped.title,
-            bodyHtml: typeof result.bodyHtml === "string" ? result.bodyHtml : ""
+            bodyHtml: typeof result.bodyHtml === "string" ? result.bodyHtml : "",
+            coverImage: result.coverImage && typeof result.coverImage === "object" ? result.coverImage : null
           };
         }
       } catch (scrapeError) {
         console.warn("POSSE: Failed to scrape article content", scrapeError);
+        if (tabDetails && typeof tabDetails.id === "number") {
+          const message = scrapeError && scrapeError.message ? scrapeError.message : "POSSE: Failed to scrape article content.";
+          try {
+            await browserApi.tabs.executeScript(tabDetails.id, {
+              code: `window.alert(${JSON.stringify(message)})`
+            });
+          } catch (alertError) {
+            console.warn("POSSE: Unable to surface scrape error to the user", alertError);
+          }
+        }
+        throw scrapeError;
       }
     }
 
@@ -92,7 +104,8 @@ browserApi.browserAction.onClicked.addListener(async (activeTab) => {
     const metadata = {
       sourceUrl,
       sourceTitle: sourceTitle || "",
-      bodyHtml: scraped.bodyHtml || ""
+      bodyHtml: scraped.bodyHtml || "",
+      coverImage: scraped.coverImage || null
     };
 
     const discordTab = await browserApi.tabs.create({
@@ -187,7 +200,8 @@ browserApi.runtime.onMessage.addListener((message, sender) => {
       success: true,
       title: details.payload.sourceTitle || "",
       sourceUrl: details.payload.sourceUrl || "",
-      bodyHtml: details.payload.bodyHtml || ""
+      bodyHtml: details.payload.bodyHtml || "",
+      coverImage: details.payload.coverImage || null
     });
   }
 

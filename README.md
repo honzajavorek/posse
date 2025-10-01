@@ -10,6 +10,7 @@ POSSE ("Publish on your Own Site, Syndicate Elsewhere") is a minimal Firefox bro
 - Opens LinkedIn's article editor at `https://www.linkedin.com/article/new/`, pre-fills the title input, and inserts the article body HTML (including images)
 - Converts blog admonitions (`role="alert"` or `role="status"`) into LinkedIn-friendly blockquotes during paste
 - Flattens figure captions by stripping links so photographer credits remain visible in LinkedIn
+- Detects the blog’s cover image (matching `og:image`), uploads it to LinkedIn’s cover slot, and removes it from the pasted body
 - Lightweight, runs locally without any external dependencies
 
 ## Project Structure
@@ -70,6 +71,7 @@ Press `Ctrl+C` in the terminal to shut down the `web-ext` runner. Firefox closes
 - Article scraping is hard-wired to the DOM structure of honzajavorek.cz blog posts. Trying to run the extension elsewhere will show an alert and abort the workflow.
 - Admonition blocks on the blog (e.g., role-based alerts) are rewritten to plain blockquotes so LinkedIn renders them consistently.
 - Figure captions retain their text but drop hyperlinks to match LinkedIn’s caption support.
+- The first in-article image must match the page’s `og:image`; otherwise the workflow aborts so the LinkedIn cover can stay in sync with the blog.
 - No data is persisted; everything happens in-memory on each click.
 - The extension is configured for the specific Discord channel mentioned above. Update `TARGET_DISCORD_URL` in `background.js` to point elsewhere if desired.
 
