@@ -135,12 +135,26 @@
     });
   }
 
+  function stripLinksFromFigureCaptions(clone) {
+    const captions = clone.querySelectorAll('figcaption');
+    captions.forEach((caption) => {
+      const anchors = caption.querySelectorAll('a');
+      anchors.forEach((anchor) => {
+        const text = anchor.textContent || anchor.getAttribute('title') || anchor.href || '';
+        const replacement = document.createTextNode(text.trim());
+        anchor.replaceWith(replacement);
+      });
+      caption.normalize();
+    });
+  }
+
   const articleElement = getArticleRoot();
   const articleBody = getArticleBody(articleElement);
   const articleClone = articleBody.cloneNode(true);
 
   sanitizeClone(articleClone);
   convertAdmonitionsToBlockquotes(articleClone);
+  stripLinksFromFigureCaptions(articleClone);
 
   return {
     url: getCanonicalUrl(),
