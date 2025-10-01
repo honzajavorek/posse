@@ -54,6 +54,76 @@ function ensureElementInView(element) {
   }
 }
 
+function suppressFileDialogTemporarily() {
+  const proto = HTMLInputElement && HTMLInputElement.prototype ? HTMLInputElement.prototype : null;
+  if (!proto) {
+    return () => {};
+  }
+
+  const originalClick = proto.click;
+  const originalShowPicker = typeof proto.showPicker === "function" ? proto.showPicker : null;
+  const suppressedInputs = new WeakSet();
+
+  const clickOverride = function clickOverride(...args) {
+    if (this && this.type === "file") {
+      suppressedInputs.add(this);
+      logStep("File dialog suppressed via click override.");
+      return undefined;
+    }
+    return originalClick.apply(this, args);
+  };
+
+  try {
+    proto.click = clickOverride;
+  } catch (error) {
+    // Ignore inability to override.
+  }
+
+  if (originalShowPicker) {
+    const showPickerOverride = function showPickerOverride(...args) {
+      if (this && this.type === "file") {
+        suppressedInputs.add(this);
+        logStep("File dialog suppressed via showPicker override.");
+        return Promise.resolve();
+      }
+      return originalShowPicker.apply(this, args);
+    };
+    try {
+      proto.showPicker = showPickerOverride;
+    } catch (error) {
+      // Ignore inability to override showPicker.
+    }
+  }
+
+  const captureClick = (event) => {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.type === "file") {
+      suppressedInputs.add(target);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      logStep("File dialog suppressed via capture listener.");
+    }
+  };
+
+  document.addEventListener("click", captureClick, true);
+
+  return () => {
+    try {
+      proto.click = originalClick;
+    } catch (error) {
+      // ignore restoration issues
+    }
+    if (originalShowPicker) {
+      try {
+        proto.showPicker = originalShowPicker;
+      } catch (error) {
+        // ignore restoration issues
+      }
+    }
+    document.removeEventListener("click", captureClick, true);
+  };
+}
+
 (async () => {
   try {
     const response = await browserApi.runtime.sendMessage({ type: "POSSE_REQUEST_LINKEDIN_METADATA" });
@@ -234,9 +304,15 @@ async function stageCoverImage(coverImage) {
   }
 
   try {
-    logStep("Attempting to stage cover image.");
+    logStep("Attempting to stage cover image (file input mode).");
     logStep("Initiating cover upload modal if necessary.");
     await ensureCoverUploadModal();
+
+    const activationResult = await triggerCoverUploadButton();
+    if (!activationResult) {
+      logStep("Could not trigger cover upload button.", "", "warn");
+      return;
+    }
 
     const uploaderRoot = await waitForCoverUploaderRoot();
     if (!uploaderRoot) {
@@ -246,34 +322,18 @@ async function stageCoverImage(coverImage) {
 
     logStep("Cover uploader root located.");
 
-    const file = await buildCoverFile(coverImage);
-    if (!file) {
-      logStep("Unable to construct cover image file payload.", "", "warn");
+    const input = await waitForCoverFileInput(uploaderRoot);
+    if (!input) {
+      logStep("Cover file input not found after button activation.", "", "warn");
       return;
     }
 
-    logStep("Cover image file prepared.");
+    logStep("Cover file input available after activation.");
+    logStep("Cover staging paused awaiting file selection. Canceling faux dialog.");
 
-    const dropTarget = await waitForCoverDropTarget(uploaderRoot);
-    if (!dropTarget) {
-      logStep("Cover drop target not available.", "", "warn");
-      return;
-    }
+    preventPendingFileDialog(input);
 
-    ensureElementInView(dropTarget);
-
-    const dropped = await simulateCoverDrop(dropTarget, file);
-    if (!dropped) {
-      logStep("Simulated cover drop failed.", { target: describeElement(dropTarget) }, "warn");
-      return;
-    }
-
-    const modal = await waitForCoverEditorModal({ timeoutMs: 8000 });
-    if (modal) {
-      logStep("Cover editor modal opened after simulated drop.");
-    } else {
-      logStep("Cover editor modal not detected after drop.", "", "warn");
-    }
+    logStep("Cover file input ready for injection stage.");
   } catch (error) {
     logStep("Failed to stage cover image", error, "error");
   }
@@ -335,6 +395,31 @@ async function waitForCoverDropTarget(root, { timeoutMs = 6000, intervalMs = 120
     if (target) {
       return target;
     }
+    await sleep(intervalMs);
+  }
+
+  return null;
+}
+
+async function waitForCoverFileInput(root, { timeoutMs = 5000, intervalMs = 120 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const selectors = [
+    'input[type="file"][accept*="image"]',
+    'input[type="file"][accept*="png"]',
+    'input[type="file"][accept*="jpg"]',
+    'input[type="file"][accept*="jpeg"]',
+    'input[type="file"]'
+  ];
+
+  while (Date.now() <= deadline) {
+    const scope = root && typeof root.querySelector === "function" ? root : document;
+    for (const selector of selectors) {
+      const candidate = scope.querySelector(selector);
+      if (candidate instanceof HTMLInputElement) {
+        return candidate;
+      }
+    }
+
     await sleep(intervalMs);
   }
 
@@ -452,6 +537,48 @@ async function ensureCoverUploadModal() {
   }
 
   logStep("Cover uploader trigger activation unsuccessful; proceeding with lazy load.", "", "warn");
+}
+
+async function triggerCoverUploadButton({ timeoutMs = 4000 } = {}) {
+  const selectors = [
+    'button[aria-label="Upload from computer"]',
+    '.article-editor-cover-media__placeholder button.artdeco-button',
+    '.article-editor-cover-media button[aria-label*="Upload"]'
+  ];
+
+  let button = null;
+  for (const selector of selectors) {
+    button = document.querySelector(selector);
+    if (button instanceof HTMLButtonElement) {
+      break;
+    }
+  }
+
+  if (!(button instanceof HTMLButtonElement)) {
+    button = await waitForElement(selectors[0], document, Math.max(1, Math.floor(timeoutMs / DEFAULT_WAIT_DELAY_MS)), DEFAULT_WAIT_DELAY_MS);
+  }
+
+  if (!(button instanceof HTMLButtonElement)) {
+    logStep("Cover upload button not found for activation.", "", "warn");
+    return false;
+  }
+
+  logStep("Cover upload button located, suppressing file dialog and triggering click.");
+
+  ensureElementInView(button);
+
+  const restoreDialog = suppressFileDialogTemporarily();
+  try {
+    safeActivate(button);
+    await sleep(180);
+  } catch (error) {
+    logStep("Cover upload button activation failed.", error, "warn");
+    restoreDialog();
+    return false;
+  }
+
+  restoreDialog();
+  return true;
 }
 
 function safeActivate(element) {
@@ -608,21 +735,260 @@ function dataUrlToFile(dataUrl, fileName, mimeType) {
   }
 }
 
+async function ensureCoverFileCompatibility(file, coverImage) {
+  if (!file) {
+    return null;
+  }
+
+  const allowedTypes = new Set(["image/jpeg", "image/png"]);
+  const lowerType = (file.type || "").toLowerCase();
+
+  if (allowedTypes.has(lowerType)) {
+    const normalizedName = normalizeFileNameForType(file.name, lowerType);
+    if (normalizedName === file.name && file.type === lowerType) {
+      return file;
+    }
+    return new File([file], normalizedName, {
+      type: lowerType,
+      lastModified: typeof file.lastModified === "number" ? file.lastModified : Date.now()
+    });
+  }
+
+  let sourceDataUrl = null;
+  if (coverImage && typeof coverImage.dataUrl === "string" && coverImage.dataUrl.startsWith("data:")) {
+    sourceDataUrl = coverImage.dataUrl;
+  }
+
+  if (!sourceDataUrl) {
+    sourceDataUrl = await blobToDataUrl(file);
+  }
+
+  if (!sourceDataUrl) {
+    logStep("Unable to obtain data URL for cover image conversion.", "", "warn");
+    return file;
+  }
+
+  const pngDataUrl = await convertDataUrlToMime(sourceDataUrl, "image/png");
+  if (!pngDataUrl) {
+    logStep("Cover image conversion to PNG failed.", "", "warn");
+    return file;
+  }
+
+  const pngFileName = normalizeFileNameForType(file.name, "image/png");
+  const pngFile = dataUrlToFile(pngDataUrl, pngFileName, "image/png");
+  if (pngFile) {
+    return pngFile;
+  }
+
+  logStep("Cover image conversion yielded no file, falling back to original payload.", "", "warn");
+  return file;
+}
+
+function normalizeFileNameForType(fileName, mimeType) {
+  const base = deriveFileNameBase(fileName);
+  const extension = mimeType === "image/png" ? ".png" : ".jpg";
+  return `${base}${extension}`;
+}
+
+function deriveFileNameBase(fileName) {
+  const fallback = "cover-image";
+  if (!fileName || typeof fileName !== "string") {
+    return fallback;
+  }
+
+  const sanitized = fileName.split(/[?#]/)[0];
+  const segments = sanitized.split('/');
+  const lastSegment = segments[segments.length - 1] || "";
+  const base = lastSegment.replace(/\.[^.]+$/, "").trim();
+  return base || fallback;
+}
+
+async function blobToDataUrl(blob) {
+  if (!blob) {
+    return null;
+  }
+
+  return new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = () => {
+        resolve(typeof reader.result === "string" ? reader.result : null);
+      };
+      reader.onerror = () => {
+        resolve(null);
+      };
+      reader.readAsDataURL(blob);
+    } catch (error) {
+      resolve(null);
+    }
+  });
+}
+
+async function convertDataUrlToMime(dataUrl, mimeType = "image/png") {
+  if (!dataUrl) {
+    return null;
+  }
+
+  try {
+    const image = await loadImageFromSource(dataUrl);
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+
+    if (!width || !height) {
+      return null;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return null;
+    }
+
+    context.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL(mimeType);
+  } catch (error) {
+    logStep("Image conversion failed.", error, "warn");
+    return null;
+  }
+}
+
+function loadImageFromSource(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = (event) => reject(event);
+    image.src = src;
+  });
+}
+
+function augmentFileForDragAndDrop(file) {
+  if (!(file instanceof File)) {
+    return file;
+  }
+
+  const lastModified = typeof file.lastModified === "number" ? file.lastModified : Date.now();
+  const descriptorOptions = { configurable: true, enumerable: false, writable: false };
+
+  try {
+    Object.defineProperty(file, "lastModifiedDate", { ...descriptorOptions, value: new Date(lastModified) });
+  } catch (error) {
+    // ignore descriptor override issues
+  }
+
+  try {
+    Object.defineProperty(file, "webkitRelativePath", { ...descriptorOptions, value: "" });
+  } catch (error) {
+    // ignore descriptor override issues
+  }
+
+  if (!("path" in file)) {
+    try {
+      Object.defineProperty(file, "path", { ...descriptorOptions, value: `/${file.name}` });
+    } catch (error) {
+      // ignore descriptor override issues
+    }
+  }
+
+  return file;
+}
+
+function createSyntheticFileEntry(file) {
+  if (!(file instanceof File)) {
+    return null;
+  }
+
+  const entry = {
+    isFile: true,
+    isDirectory: false,
+    name: file.name,
+    fullPath: `/${file.name}`,
+    filesystem: null,
+    file(callback, errorCallback) {
+      try {
+        const cloned = new File([file], file.name, { type: file.type, lastModified: file.lastModified });
+        callback(cloned);
+      } catch (error) {
+        if (typeof errorCallback === "function") {
+          errorCallback(error);
+        }
+      }
+    },
+    createReader() {
+      return {
+        readEntries(readCallback) {
+          if (typeof readCallback === "function") {
+            readCallback([]);
+          }
+        }
+      };
+    },
+    toURL() {
+      if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+        return URL.createObjectURL(file);
+      }
+      return `blob:${location.origin}/${crypto.randomUUID ? crypto.randomUUID() : Date.now()}`;
+    }
+  };
+
+  return entry;
+}
+
+function preventPendingFileDialog(input) {
+  if (!(input instanceof HTMLInputElement) || input.type !== "file") {
+    return;
+  }
+
+  const markerAttribute = "data-posse-file-dialog-suppressed";
+  input.setAttribute(markerAttribute, "true");
+
+  const preventer = (event) => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  input.addEventListener("click", preventer, true);
+
+  try {
+    Object.defineProperty(input, "showPicker", {
+      configurable: true,
+      writable: true,
+      value: () => Promise.resolve()
+    });
+  } catch (error) {
+    // Ignore inability to override showPicker on element instance.
+  }
+
+  try {
+    Object.defineProperty(input, "click", {
+      configurable: true,
+      writable: true,
+      value: () => {}
+    });
+  } catch (error) {
+    // Ignore inability to override click on element instance.
+  }
+}
+
 async function simulateCoverDrop(target, file) {
   if (!target || !file || typeof DataTransfer !== "function" || typeof DragEvent !== "function") {
     return false;
   }
 
   try {
+    const normalizedFile = augmentFileForDragAndDrop(file);
+
     const transfer = new DataTransfer();
-    transfer.items.add(file);
+    transfer.items.add(normalizedFile);
 
     const item = transfer.items[0];
     if (item && !item.getAsFile) {
       try {
         Object.defineProperty(item, "getAsFile", {
           configurable: true,
-          value: () => file
+          value: () => normalizedFile
         });
       } catch (error) {
         // Ignore if we can't override
@@ -643,7 +1009,15 @@ async function simulateCoverDrop(target, file) {
 
     ensureProperty(transfer, "dropEffect", "copy");
     ensureProperty(transfer, "effectAllowed", "all");
+    ensureProperty(item, "kind", "file");
+    ensureProperty(item, "type", normalizedFile.type || "application/octet-stream");
     ensureProperty(transfer, "types", Object.freeze(["Files"]));
+
+    const syntheticEntry = createSyntheticFileEntry(normalizedFile);
+    if (item && syntheticEntry) {
+      ensureProperty(item, "webkitGetAsEntry", () => syntheticEntry);
+      ensureProperty(item, "getAsEntry", () => syntheticEntry);
+    }
 
     const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
     const clientX = rect.left + Math.max(1, rect.width) / 2;
@@ -682,7 +1056,7 @@ async function simulateCoverDrop(target, file) {
       await nextFrame();
     };
 
-    await dispatch("dragenter");
+  await dispatch("dragenter");
     await sleep(40);
     await dispatch("dragover");
     await sleep(60);
