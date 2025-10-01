@@ -9,24 +9,48 @@ const browserApi = typeof browser !== "undefined" ? browser : chrome;
       return;
     }
 
-    const [titleField, bodyField] = await Promise.all([
-      waitForTitleField(),
-      waitForBodyField()
-    ]);
+    const titleField = await waitForTitleField();
 
     if (!titleField) {
       console.error("POSSE: Could not locate LinkedIn article title input.");
       return;
     }
 
-    stageTitle(titleField, response.title || response.sourceUrl || "");
+    const preferredTitle = response.title || response.sourceUrl || "";
+    const preparedBodyHtml = resolveBodyHtml(response.bodyHtml || "", response.sourceUrl || "");
 
+    stageTitle(titleField, preferredTitle);
+
+    if (!preparedBodyHtml) {
+      console.warn("POSSE: No body content available, skipping body injection.");
+      return;
+    }
+
+    await delay(750);
+
+    let bodyField = await waitForBodyField();
     if (!bodyField) {
       console.error("POSSE: Could not locate LinkedIn article body editor.");
       return;
     }
 
-    stageBody(bodyField, response.bodyHtml || "", response.sourceUrl || "");
+    let injected = stageBody(bodyField, preparedBodyHtml);
+
+    if (!injected) {
+      await delay(500);
+      bodyField = await waitForBodyField();
+      if (!bodyField) {
+        console.error("POSSE: Could not re-locate LinkedIn article body editor after retry.");
+        return;
+      }
+      injected = stageBody(bodyField, preparedBodyHtml);
+    }
+
+    if (injected) {
+      ensureBodyPersistence(preparedBodyHtml);
+    } else {
+      console.warn("POSSE: LinkedIn body editor rejected injected content.");
+    }
   } catch (error) {
     console.error("POSSE: Failed to inject LinkedIn content", error);
   }
@@ -114,16 +138,17 @@ function dispatchTitleEvents(element, title) {
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function stageBody(element, html, fallbackText) {
-  const finalHtml = formatBodyHtml(html, fallbackText);
-  if (!finalHtml) {
-    console.warn("POSSE: No article body HTML provided, skipping body injection.");
-    return;
+function stageBody(element, html) {
+  const trimmed = typeof html === "string" ? html.trim() : "";
+  if (!trimmed) {
+    return false;
   }
 
   focusBody(element);
-  replaceBodyContent(element, finalHtml);
-  dispatchBodyEvents(element, finalHtml);
+  replaceBodyContent(element, trimmed);
+  dispatchBodyEvents(element, trimmed);
+
+  return hasBodyContent(element);
 }
 
 function focusBody(element) {
@@ -177,7 +202,7 @@ function dispatchBodyEvents(element, html) {
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function formatBodyHtml(html, fallbackText) {
+function resolveBodyHtml(html, fallbackText) {
   const trimmed = typeof html === "string" ? html.trim() : "";
   if (trimmed) {
     return trimmed;
@@ -194,4 +219,46 @@ function formatBodyHtml(html, fallbackText) {
     .replace(/>/g, "&gt;");
 
   return `<p>${escaped}</p>`;
+}
+
+function ensureBodyPersistence(html, attemptsLeft = 3, initialDelay = 800) {
+  if (!html || attemptsLeft <= 0) {
+    return;
+  }
+
+  setTimeout(async () => {
+    const candidate = await waitForBodyField(10, 200);
+    if (!candidate) {
+      ensureBodyPersistence(html, attemptsLeft - 1, initialDelay + 300);
+      return;
+    }
+
+    if (!hasBodyContent(candidate)) {
+      const injected = stageBody(candidate, html);
+      if (!injected) {
+        ensureBodyPersistence(html, attemptsLeft - 1, initialDelay + 300);
+        return;
+      }
+    }
+
+    // Verify once more later to guard against late re-renders.
+    ensureBodyPersistence(html, attemptsLeft - 1, initialDelay + 300);
+  }, initialDelay);
+}
+
+function hasBodyContent(element) {
+  if (!element || !element.isConnected) {
+    return false;
+  }
+  if (element.innerHTML && element.innerHTML.trim()) {
+    return true;
+  }
+  if (element.textContent && element.textContent.trim()) {
+    return true;
+  }
+  return false;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
