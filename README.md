@@ -8,6 +8,7 @@ POSSE ("Publish on your Own Site, Syndicate Elsewhere") is a minimal Firefox bro
 - Automatically opens the Discord channel at `https://discord.com/channels/769966886598737931/1075091413454303272`
 - Finds the Discord message composer and stages the URL for you (does **not** send the message)
 - Opens LinkedIn's article editor at `https://www.linkedin.com/article/new/`, pre-fills the title input, and inserts the article body HTML (including images)
+- Converts blog admonitions (`role="alert"` or `role="status"`) into LinkedIn-friendly blockquotes during paste
 - Lightweight, runs locally without any external dependencies
 
 ## Project Structure
@@ -66,6 +67,7 @@ Press `Ctrl+C` in the terminal to shut down the `web-ext` runner. Firefox closes
 - The extension relies on Discord's current DOM structure (the message composer must expose a `[role="textbox"]` element). If Discord updates their interface, the selector may need adjustment.
 - LinkedIn's article editor is targeted via the `#article-editor-headline__textarea` selector. If LinkedIn renames or restructures the title field, update `linkedin-inject.js` accordingly.
 - Article scraping is hard-wired to the DOM structure of honzajavorek.cz blog posts. Trying to run the extension elsewhere will show an alert and abort the workflow.
+- Admonition blocks on the blog (e.g., role-based alerts) are rewritten to plain blockquotes so LinkedIn renders them consistently.
 - No data is persisted; everything happens in-memory on each click.
 - The extension is configured for the specific Discord channel mentioned above. Update `TARGET_DISCORD_URL` in `background.js` to point elsewhere if desired.
 

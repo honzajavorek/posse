@@ -126,11 +126,21 @@
     clone.querySelectorAll('img[srcset]').forEach((node) => absolutizeSrcset(node));
   }
 
+  function convertAdmonitionsToBlockquotes(clone) {
+    const admonitions = clone.querySelectorAll('[role="alert"], [role="status"]');
+    admonitions.forEach((node) => {
+      const blockquote = document.createElement('blockquote');
+      blockquote.innerHTML = node.innerHTML;
+      node.replaceWith(blockquote);
+    });
+  }
+
   const articleElement = getArticleRoot();
   const articleBody = getArticleBody(articleElement);
   const articleClone = articleBody.cloneNode(true);
 
   sanitizeClone(articleClone);
+  convertAdmonitionsToBlockquotes(articleClone);
 
   return {
     url: getCanonicalUrl(),
