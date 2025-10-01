@@ -25,6 +25,35 @@ const nextFrame = () => new Promise((resolve) => {
   }
 });
 
+function describeElement(element) {
+  if (!(element instanceof Element)) {
+    return "unknown";
+  }
+
+  const tag = element.tagName ? element.tagName.toLowerCase() : "element";
+  const id = element.id ? `#${element.id}` : "";
+  const classList = element.classList && element.classList.length
+    ? `.${Array.from(element.classList).join('.')}`
+    : "";
+  return `${tag}${id}${classList}`;
+}
+
+function ensureElementInView(element) {
+  if (!(element instanceof Element) || typeof element.getBoundingClientRect !== "function") {
+    return;
+  }
+
+  try {
+    const rect = element.getBoundingClientRect();
+    const withinViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
+    if (!withinViewport) {
+      element.scrollIntoView({ block: "center", behavior: "auto" });
+    }
+  } catch (error) {
+    // Ignore scrolling issues.
+  }
+}
+
 (async () => {
   try {
     const response = await browserApi.runtime.sendMessage({ type: "POSSE_REQUEST_LINKEDIN_METADATA" });
@@ -68,7 +97,7 @@ const nextFrame = () => new Promise((resolve) => {
 
     logStep("Located hydrated body editor.");
 
-  const injected = await stageBody(hydratedBodyField, preparedBodyHtml, preparedBodyText, true);
+    const injected = await stageBody(hydratedBodyField, preparedBodyHtml, preparedBodyText, true);
 
     if (!injected) {
       logStep("LinkedIn body editor rejected injected content.", "", "warn");
@@ -225,31 +254,26 @@ async function stageCoverImage(coverImage) {
 
     logStep("Cover image file prepared.");
 
-    const strategies = [
-      { name: "file input", handler: () => attemptCoverFileInput(uploaderRoot, file), previewTimeout: 7000 },
-      { name: "simulated drop", handler: () => attemptCoverSimulatedDrop(uploaderRoot, file) },
-      { name: "React drop handlers", handler: () => attemptReactDropHandlers(uploaderRoot, file) },
-      { name: "LinkedIn upload action", handler: () => attemptLinkedInUploadAction(uploaderRoot, file), previewTimeout: 8000 }
-    ];
-
-    for (const strategy of strategies) {
-      logStep("Attempting cover staging strategy.", { strategy: strategy.name });
-      const executed = await strategy.handler();
-      if (!executed) {
-        logStep("Cover staging strategy reported immediate failure.", { strategy: strategy.name }, "warn");
-        continue;
-      }
-
-      const preview = await waitForCoverPreview(uploaderRoot, { timeoutMs: strategy.previewTimeout || 6000 });
-      if (preview) {
-        logStep("Cover image preview detected after strategy.", { strategy: strategy.name });
-        return;
-      }
-
-      logStep("Preview not detected after strategy execution.", { strategy: strategy.name }, "warn");
+    const dropTarget = await waitForCoverDropTarget(uploaderRoot);
+    if (!dropTarget) {
+      logStep("Cover drop target not available.", "", "warn");
+      return;
     }
 
-    logStep("Unable to stage cover image using available strategies.", "", "warn");
+    ensureElementInView(dropTarget);
+
+    const dropped = await simulateCoverDrop(dropTarget, file);
+    if (!dropped) {
+      logStep("Simulated cover drop failed.", { target: describeElement(dropTarget) }, "warn");
+      return;
+    }
+
+    const modal = await waitForCoverEditorModal({ timeoutMs: 8000 });
+    if (modal) {
+      logStep("Cover editor modal opened after simulated drop.");
+    } else {
+      logStep("Cover editor modal not detected after drop.", "", "warn");
+    }
   } catch (error) {
     logStep("Failed to stage cover image", error, "error");
   }
@@ -268,77 +292,48 @@ async function waitForCoverUploaderRoot() {
   return null;
 }
 
-async function ensureCoverFileInput(root) {
-  logStep("Ensuring cover file input is available.");
-  const immediate = findCoverFileInput(root) || findCoverFileInput(document);
-  if (immediate) {
-    logStep("Cover file input found immediately.");
-    return immediate;
-  }
-
-  const scoped = await waitForElement('#media-editor-file-selector__file-input', root);
-  if (scoped instanceof HTMLInputElement) {
-    logStep("Cover file input resolved within uploader root.");
-    return scoped;
-  }
-
-  const global = await waitForElement('#media-editor-file-selector__file-input', document, DEFAULT_WAIT_ATTEMPTS * 2, DEFAULT_WAIT_DELAY_MS);
-  if (global) {
-    logStep("Cover file input resolved via global lookup.");
-  }
-  if (!global) {
-    logStep("Cover file input still not found after global lookup.", "", "warn");
-  }
-  return global instanceof HTMLInputElement ? global : null;
-}
-
-function findCoverFileInput(scope) {
-  if (!scope || typeof scope.querySelector !== "function") {
-    return null;
-  }
-
-  const selector = '#media-editor-file-selector__file-input, input[name="file"][type="file"][accept*="image/"]';
-  const candidate = scope.querySelector(selector);
-  if (candidate instanceof HTMLInputElement) {
-    logStep("Found candidate cover file input within scope.");
-    return candidate;
-  }
-  return null;
-}
-
 function findCoverDropTarget(root) {
-  if (!root || typeof root.querySelector !== "function") {
-    return root instanceof Element ? root : null;
-  }
-
   const selectors = [
-    '[data-test-article-editor-cover-media] .media-editor-drop-target',
-    '.media-editor-drop-target',
-    '.article-editor-cover-media__media-drop-target',
+    '.article-editor-cover-media__placeholder',
     '.article-editor-cover-media__placeholder-container',
-    '.article-editor-cover-media'
+    '.article-editor-cover-media__media-drop-target',
+    '.media-editor-drop-target',
+    '[data-test-article-editor-cover-media] .media-editor-drop-target'
   ];
 
-  for (const selector of selectors) {
-    const candidate = root.querySelector(selector);
-    if (candidate instanceof HTMLElement) {
-      logStep("Located cover drop target.", selector);
-      return candidate;
+  const scopes = [];
+  if (root && root instanceof HTMLElement) {
+    scopes.push(root);
+  }
+  scopes.push(document.body);
+
+  for (const scope of scopes) {
+    if (!scope || typeof scope.querySelector !== "function") {
+      continue;
+    }
+    for (const selector of selectors) {
+      const candidate = scope.querySelector(selector);
+      if (candidate instanceof HTMLElement && candidate.isConnected) {
+        logStep("Located cover drop target.", selector);
+        return candidate;
+      }
     }
   }
 
-  return root instanceof HTMLElement ? root : null;
+  if (root instanceof HTMLElement && root.matches('.article-editor-cover-media__placeholder, .article-editor-cover-media__placeholder-container')) {
+    return root;
+  }
+
+  return null;
 }
 
-async function waitForCoverPreview(root, { timeoutMs = 6000, intervalMs = 120 } = {}) {
-  const selector = '[data-test-article-editor-cover-media] img, .article-editor-cover-media img';
+async function waitForCoverDropTarget(root, { timeoutMs = 6000, intervalMs = 120 } = {}) {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() <= deadline) {
-    const scope = root && typeof root.querySelector === "function" ? root : document;
-    const candidate = scope.querySelector(selector);
-    if (candidate instanceof HTMLImageElement) {
-      return candidate;
+    const target = findCoverDropTarget(root);
+    if (target) {
+      return target;
     }
     await sleep(intervalMs);
   }
@@ -346,44 +341,49 @@ async function waitForCoverPreview(root, { timeoutMs = 6000, intervalMs = 120 } 
   return null;
 }
 
-async function attemptCoverFileInput(root, file) {
-  const input = await ensureCoverFileInput(root);
-  if (!input) {
-    logStep("Cover file input unavailable for injection.", { root }, "warn");
-    return false;
+function findCoverEditorModal() {
+  const selectors = [
+    '[data-test-article-editor-cover-media-editor-modal]',
+    '.article-editor__media-editor-modal',
+    '.article-editor__media-editor-modal-v2',
+    '.article-editor-cover-media__editor-modal',
+    '.artdeco-modal.article-editor__media-editor-modal'
+  ];
+
+  for (const selector of selectors) {
+    const element = document.querySelector(selector);
+    if (element instanceof HTMLElement) {
+      return element;
+    }
   }
 
-  const injected = injectFileIntoInput(input, file);
-  if (!injected) {
-    logStep("Cover file input injection failed.", { input }, "warn");
-  } else {
-    logStep("Cover file input injection dispatched.");
+  const modalCandidates = document.querySelectorAll('.artdeco-modal');
+  for (const candidate of modalCandidates) {
+    if (candidate instanceof HTMLElement) {
+      const modalId = candidate.getAttribute('data-test-modal-id') || candidate.getAttribute('data-test-modal');
+      if (modalId && modalId.toLowerCase().includes('media-editor')) {
+        return candidate;
+      }
+      const role = candidate.getAttribute('role');
+      if (role === 'dialog' && candidate.querySelector('.media-editor') && candidate.querySelector('button')) {
+        return candidate;
+      }
+    }
   }
-  return injected;
+
+  return null;
 }
 
-async function attemptCoverSimulatedDrop(root, file) {
-  const target = findCoverDropTarget(root);
-  if (!target) {
-    logStep("Cover drop target not found for simulated drop.", { root }, "warn");
-    return false;
+async function waitForCoverEditorModal({ timeoutMs = 3500, intervalMs = 120 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let modal = findCoverEditorModal();
+
+  while (!modal && Date.now() <= deadline) {
+    await sleep(intervalMs);
+    modal = findCoverEditorModal();
   }
 
-  return simulateCoverDrop(target, file);
-}
-
-async function attemptReactDropHandlers(root, file) {
-  const target = findCoverDropTarget(root);
-  if (!target) {
-    logStep("Cover drop target not found for React handlers.", { root }, "warn");
-    return false;
-  }
-
-  return invokeReactDropHandlers(target, file);
-}
-
-async function attemptLinkedInUploadAction(root, file) {
-  return invokeLinkedInUploadAction(root, file);
+  return modal instanceof HTMLElement ? modal : null;
 }
 
 async function ensureCoverUploadModal() {
@@ -608,46 +608,6 @@ function dataUrlToFile(dataUrl, fileName, mimeType) {
   }
 }
 
-function injectFileIntoInput(input, file) {
-  if (!input || !file || typeof DataTransfer !== "function") {
-    return false;
-  }
-
-  const transfer = new DataTransfer();
-  transfer.items.add(file);
-
-  try {
-    input.value = "";
-    input.files = transfer.files;
-    logStep("Assigned file list to input via direct property.");
-  } catch (directError) {
-    try {
-      const descriptor = {
-        configurable: true,
-        get: () => transfer.files
-      };
-
-      Object.defineProperty(input, "files", descriptor);
-      logStep("Assigned file list via property descriptor override.");
-    } catch (descriptorError) {
-      logStep("Unable to override file input.", descriptorError, "warn");
-      return false;
-    }
-  }
-
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new Event("change", { bubbles: true }));
-  logStep("Dispatched input/change events after file injection.");
-
-  try {
-    delete input.files;
-  } catch (cleanupError) {
-    // ignore cleanup issues
-  }
-
-  return true;
-}
-
 async function simulateCoverDrop(target, file) {
   if (!target || !file || typeof DataTransfer !== "function" || typeof DragEvent !== "function") {
     return false;
@@ -669,42 +629,66 @@ async function simulateCoverDrop(target, file) {
       }
     }
 
-    try {
-      Object.defineProperty(transfer, "dropEffect", {
-        configurable: true,
-        value: "copy"
-      });
-      Object.defineProperty(transfer, "effectAllowed", {
-        configurable: true,
-        value: "all"
-      });
-    } catch (error) {
-      // Ignore if properties are read-only.
-    }
-
-    const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
-    const clientX = rect.left + rect.width / 2;
-    const clientY = rect.top + rect.height / 2;
-
-    const dispatch = (type) => {
-      const event = new DragEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        dataTransfer: transfer,
-        clientX,
-        clientY
-      });
-      target.dispatchEvent(event);
+    const ensureProperty = (object, key, value) => {
+      try {
+        Object.defineProperty(object, key, {
+          configurable: true,
+          enumerable: true,
+          value
+        });
+      } catch (error) {
+        // Ignore if property is read-only
+      }
     };
 
-    dispatch("dragenter");
-    await nextFrame();
-    dispatch("dragover");
-    await sleep(30);
-    dispatch("drop");
-    await nextFrame();
-    dispatch("dragend");
+    ensureProperty(transfer, "dropEffect", "copy");
+    ensureProperty(transfer, "effectAllowed", "all");
+    ensureProperty(transfer, "types", Object.freeze(["Files"]));
+
+    const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+    const clientX = rect.left + Math.max(1, rect.width) / 2;
+    const clientY = rect.top + Math.max(1, rect.height) / 2;
+
+    const bubbleTargets = [target];
+    const placeholder = target.closest('.article-editor-cover-media');
+    if (placeholder && placeholder !== target) {
+      bubbleTargets.push(placeholder);
+    }
+
+    const dispatch = async (type) => {
+      for (const currentTarget of bubbleTargets) {
+        if (!currentTarget || !currentTarget.isConnected) {
+          continue;
+        }
+        const event = new DragEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          dataTransfer: transfer,
+          clientX,
+          clientY
+        });
+        try {
+          Object.defineProperty(event, "dataTransfer", {
+            configurable: true,
+            enumerable: true,
+            value: transfer
+          });
+        } catch (error) {
+          // Ignore property override issues.
+        }
+        currentTarget.dispatchEvent(event);
+      }
+      await nextFrame();
+    };
+
+    await dispatch("dragenter");
+    await sleep(40);
+    await dispatch("dragover");
+    await sleep(60);
+    await dispatch("drop");
+    await sleep(20);
+    await dispatch("dragend");
 
     logStep("Simulated drop events dispatched.");
 
@@ -713,60 +697,6 @@ async function simulateCoverDrop(target, file) {
     logStep("Failed to simulate cover drop", error, "warn");
     return false;
   }
-}
-
-async function invokeReactDropHandlers(target, file) {
-  const props = extractReactProps(target);
-  if (!props) {
-    logStep("React props not found on drop target.", "", "warn");
-    return false;
-  }
-
-  if (typeof props.onDrop !== "function" && typeof props.onDragEnter !== "function" && typeof props.onDragOver !== "function") {
-    logStep("React drop handlers missing on target.", "", "warn");
-    return false;
-  }
-
-  if (typeof DataTransfer !== "function") {
-    return false;
-  }
-
-  const transfer = new DataTransfer();
-  transfer.items.add(file);
-
-  const createEvent = (type) => ({
-    preventDefault() {},
-    stopPropagation() {},
-    persist() {},
-    dataTransfer: transfer,
-    target,
-    currentTarget: target,
-    type,
-    nativeEvent: { dataTransfer: transfer }
-  });
-
-  try {
-    if (typeof props.onDragEnter === "function") {
-      props.onDragEnter(createEvent("dragenter"));
-      await nextFrame();
-    }
-
-    if (typeof props.onDragOver === "function") {
-      props.onDragOver(createEvent("dragover"));
-      await sleep(20);
-    }
-
-    if (typeof props.onDrop === "function") {
-      props.onDrop(createEvent("drop"));
-      await nextFrame();
-      logStep("React drop handlers invoked successfully.");
-      return true;
-    }
-  } catch (error) {
-    logStep("Error invoking React drop handlers.", error, "warn");
-  }
-
-  return false;
 }
 
 function extractReactProps(element) {
@@ -783,88 +713,6 @@ function extractReactProps(element) {
 
   if (element.parentElement) {
     return extractReactProps(element.parentElement);
-  }
-
-  return null;
-}
-
-async function invokeLinkedInUploadAction(root, file) {
-  const action = findLinkedInUploadAction(root);
-  if (!action) {
-    logStep("LinkedIn upload action not found.", "", "warn");
-    return false;
-  }
-
-  logStep("Invoking LinkedIn upload action.");
-
-  const arrayBuffer = await file.arrayBuffer();
-  const blob = new Blob([arrayBuffer], { type: file.type });
-  const fileLike = new File([blob], file.name, { type: file.type, lastModified: Date.now() });
-
-  try {
-    const result = await action(fileLike);
-    logStep("LinkedIn upload action resolved.", result);
-    return true;
-  } catch (error) {
-    logStep("LinkedIn upload action failed.", error, "warn");
-    return false;
-  }
-}
-
-function findLinkedInUploadAction(root) {
-  if (!root) {
-    return null;
-  }
-
-  let element = root;
-  while (element) {
-    const props = extractReactProps(element);
-    if (props) {
-      const candidates = [
-        props.onManualUpload,
-        props.onUpload,
-        props.onFileSelected,
-        props.handleOnDrop,
-        props.onDrop,
-        props.onFilesAdded
-      ].filter((fn) => typeof fn === "function");
-
-      if (candidates.length) {
-        logStep("LinkedIn upload action candidates discovered.", {
-          count: candidates.length,
-          names: candidates.map((fn) => (fn && fn.name ? fn.name : "anonymous"))
-        });
-        return (file) => {
-          for (const fn of candidates) {
-            try {
-              const value = fn({
-                preventDefault() {},
-                stopPropagation() {},
-                dataTransfer: {
-                  files: [file]
-                },
-                target: {
-                  files: [file]
-                },
-                currentTarget: {
-                  files: [file]
-                },
-                file,
-                files: [file]
-              });
-              if (value && typeof value.then === "function") {
-                return value;
-              }
-            } catch (error) {
-              logStep("LinkedIn upload candidate threw.", error, "warn");
-            }
-          }
-          return Promise.resolve();
-        };
-      }
-    }
-
-    element = element.parentElement;
   }
 
   return null;
