@@ -69,7 +69,7 @@ Press `Ctrl+C` in the terminal to shut down the `web-ext` runner. Firefox closes
 - The extension relies on Discord's current DOM structure (the message composer must expose a `[role="textbox"]` element). If Discord updates their interface, the selector may need adjustment.
 - LinkedIn's article editor is targeted via the `#article-editor-headline__textarea` selector. If LinkedIn renames or restructures the title field, update `linkedin-inject.js` accordingly.
 - Article scraping is hard-wired to the DOM structure of honzajavorek.cz blog posts. Trying to run the extension elsewhere will show an alert and abort the workflow.
-- Admonition blocks on the blog (e.g., role-based alerts) are rewritten to plain blockquotes so LinkedIn renders them consistently.
+- Admonition blocks on the blog (e.g., role-based alerts) are rewritten to plain blockquotes so LinkedIn renders them consistently, and a separate „Odebírání“ blockquote is inserted beneath the lead paragraph to encourage subscriptions before the existing „Čísla“ notice.
 - Figure captions retain their text but drop hyperlinks to match LinkedIn’s caption support.
 - The first in-article image must match the page’s `og:image`; otherwise the workflow aborts so the LinkedIn cover can stay in sync with the blog.
 - No data is persisted; everything happens in-memory on each click.

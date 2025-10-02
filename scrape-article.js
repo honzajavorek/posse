@@ -161,6 +161,59 @@
     });
   }
 
+  function insertLinkedinSubscriptionCallout(clone, coverImageUrlAbsolute) {
+    if (!clone || !coverImageUrlAbsolute) {
+      return;
+    }
+
+    if (clone.querySelector('blockquote[data-posse-subscription="true"]')) {
+      return;
+    }
+
+    const images = Array.from(clone.querySelectorAll('img'));
+    let coverImageElement = null;
+    for (const img of images) {
+      const src = img.getAttribute('src');
+      if (!src) {
+        continue;
+      }
+      if (src === coverImageUrlAbsolute) {
+        coverImageElement = img;
+        break;
+      }
+      try {
+        const normalized = new URL(src, baseUrl).href;
+        if (normalized === coverImageUrlAbsolute) {
+          coverImageElement = img;
+          break;
+        }
+      } catch (error) {
+        // Ignore URL normalization failures.
+      }
+    }
+
+    if (!coverImageElement) {
+      return;
+    }
+
+    const insertionAnchor = coverImageElement.closest('figure, picture') || coverImageElement.parentElement;
+    const parent = insertionAnchor && insertionAnchor.parentNode;
+    if (!parent) {
+      return;
+    }
+
+    const doc = clone.ownerDocument || document;
+    const blockquote = doc.createElement('blockquote');
+    blockquote.setAttribute('data-posse-subscription', 'true');
+    blockquote.innerHTML = '<p><strong>Odebírání:</strong> Baví tě týdenní poznámky a chceš si je číst pravidelně? Nespoléhej se na algoritmus LinkedInu! Odebírej moje články <a href="http://eepurl.com/ifI06H">e-mailem</a>.</p>';
+
+    if (insertionAnchor.nextSibling) {
+      parent.insertBefore(blockquote, insertionAnchor.nextSibling);
+    } else {
+      parent.appendChild(blockquote);
+    }
+  }
+
   function stripLinksFromFigureCaptions(clone) {
     const captions = clone.querySelectorAll('figcaption');
     captions.forEach((caption) => {
@@ -338,6 +391,7 @@
   const coverImageUrlAbsolute = getOgImageUrl();
 
   sanitizeClone(articleClone);
+  insertLinkedinSubscriptionCallout(articleClone, coverImageUrlAbsolute);
   convertAdmonitionsToBlockquotes(articleClone);
   stripLinksFromFigureCaptions(articleClone);
 
