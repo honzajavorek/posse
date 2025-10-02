@@ -366,16 +366,9 @@ async function stageCoverImage(coverImage) {
       return;
     }
 
-    logStep("Cover image injected into file input.");
+    logStep("Cover image injected into file input; waiting for cover editor controls to become active.");
 
-    const preview = await waitForCoverPreview([uploaderRoot, editorModal], { timeoutMs: 8000 });
-    if (preview) {
-      logStep("Cover image preview detected after file input injection.");
-    } else {
-      logStep("Cover preview not detected after file input injection.", "", "warn");
-    }
-
-    await applyCoverMetadata(coverImage, uploaderRoot, preview || null);
+    await applyCoverMetadata(coverImage, uploaderRoot, null);
   } catch (error) {
     logStep("Failed to stage cover image", error, "error");
   }
@@ -1398,7 +1391,7 @@ function dispatchBodyEvents(element, html) {
 async function applyCoverMetadata(coverImage, uploaderRoot, preview) {
   const metadata = coverImage && typeof coverImage === "object" ? coverImage : {};
   if (!preview) {
-    logStep("Proceeding with cover metadata application without explicit preview element; using fallback scopes.", "", "warn");
+    logStep("Proceeding with cover metadata application without explicit preview element.");
   }
   const modal = resolveCoverEditorModal(preview, uploaderRoot);
   const searchRoot = modal || uploaderRoot || document;
