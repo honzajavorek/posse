@@ -36,7 +36,7 @@ function randomIntBetween(min, max) {
   return Math.floor(Math.random() * (upper - lower + 1)) + lower;
 }
 
-async function humanPause(label = "", { minMs = 650, maxMs = 1100 } = {}) {
+async function humanPause(label = "", { minMs = 140, maxMs = 320 } = {}) {
   const duration = Math.max(0, randomIntBetween(minMs, maxMs));
   if (duration > 0) {
     const message = label ? `Pausing briefly ${label}.` : "Pausing briefly.";
@@ -46,7 +46,7 @@ async function humanPause(label = "", { minMs = 650, maxMs = 1100 } = {}) {
   return duration;
 }
 
-async function waitForDraftSync({ reason = "", minWaitMs = 900, timeoutMs = 15000, pollIntervalMs = 220 } = {}) {
+async function waitForDraftSync({ reason = "", minWaitMs = 420, timeoutMs = 6500, pollIntervalMs = 150 } = {}) {
   const label = reason ? ` (${reason})` : "";
   logStep(`Waiting for LinkedIn autosave${label}.`);
 
@@ -69,6 +69,7 @@ async function waitForDraftSync({ reason = "", minWaitMs = 900, timeoutMs = 1500
 
   let savedDetected = false;
   let lastSavingSeen = 0;
+  let lastStatusSeen = start;
 
   while (Date.now() <= deadline) {
     let cycleSawSaved = false;
@@ -93,6 +94,8 @@ async function waitForDraftSync({ reason = "", minWaitMs = 900, timeoutMs = 1500
           cycleSawSaved = true;
           savedDetected = true;
         }
+
+        lastStatusSeen = Date.now();
       }
     }
 
@@ -101,6 +104,13 @@ async function waitForDraftSync({ reason = "", minWaitMs = 900, timeoutMs = 1500
       if (elapsed - lastSavingSeen >= pollIntervalMs * 2) {
         logStep(`LinkedIn autosave confirmed${label}.`);
         return true;
+      }
+    }
+
+    if (!savedDetected && elapsed >= minWaitMs) {
+      const sinceStatus = Date.now() - lastStatusSeen;
+      if (sinceStatus >= pollIntervalMs * 3) {
+        break;
       }
     }
 
