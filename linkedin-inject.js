@@ -368,13 +368,14 @@ async function stageCoverImage(coverImage) {
 
     logStep("Cover image injected into file input.");
 
-  const preview = await waitForCoverPreview([uploaderRoot, editorModal], { timeoutMs: 8000 });
+    const preview = await waitForCoverPreview([uploaderRoot, editorModal], { timeoutMs: 8000 });
     if (preview) {
       logStep("Cover image preview detected after file input injection.");
-      await applyCoverMetadata(coverImage, uploaderRoot, preview);
     } else {
       logStep("Cover preview not detected after file input injection.", "", "warn");
     }
+
+    await applyCoverMetadata(coverImage, uploaderRoot, preview || null);
   } catch (error) {
     logStep("Failed to stage cover image", error, "error");
   }
@@ -496,17 +497,32 @@ async function waitForCoverPreview(rootOrRoots, { timeoutMs = 8000, intervalMs =
   const selectors = [
     '.media-editor__preview img',
     '.media-editor__preview video',
+    '.media-editor__preview canvas',
+    '.media-editor__preview picture img',
+    '.media-editor__preview div',
     '.article-editor-cover-media__preview img',
     '.article-editor-cover-media__preview video',
+    '.article-editor-cover-media__preview canvas',
+    '.article-editor-cover-media__preview picture img',
+    '.article-editor-cover-media__preview div',
     '.media-editor-cover-preview img',
     '.media-editor-cover-preview video',
+    '.media-editor-cover-preview canvas',
+    '.media-editor-cover-preview div',
     'img.media-editor__preview-image',
     'video.media-editor__preview-video',
+    'canvas.media-editor__preview-image',
     '[data-test-cover-media-preview] img',
-    '[data-test-cover-media-preview] video'
+    '[data-test-cover-media-preview] video',
+    '[data-test-cover-media-preview] canvas',
+    '[data-test-cover-media-preview]',
+    '.media-editor__preview',
+    '.media-editor__preview-container',
+    '.media-editor__preview-content'
   ];
 
   const scopes = collectCoverQueryScopes(rootOrRoots);
+  const loggedCandidates = new WeakSet();
 
   while (Date.now() <= deadline) {
     const activeScopes = scopes.size ? Array.from(scopes) : [];
@@ -518,11 +534,35 @@ async function waitForCoverPreview(rootOrRoots, { timeoutMs = 8000, intervalMs =
       const queryRoot = scope && typeof scope.querySelector === "function" ? scope : document;
       for (const selector of selectors) {
         const candidate = queryRoot.querySelector(selector);
-        if (candidate instanceof HTMLImageElement && candidate.isConnected && candidate.naturalWidth > 0 && candidate.naturalHeight > 0) {
-          return candidate;
+        if (!(candidate instanceof Element) || !candidate.isConnected) {
+          continue;
         }
-        if (candidate instanceof HTMLVideoElement && candidate.isConnected && candidate.readyState >= 1) {
-          return candidate;
+
+        const readyElement = resolveReadyCoverPreviewElement(candidate);
+        if (readyElement) {
+          return readyElement;
+        }
+
+        if (!loggedCandidates.has(candidate)) {
+          loggedCandidates.add(candidate);
+
+          const detail = {
+            selector,
+            element: describeElement(candidate)
+          };
+
+          if (candidate instanceof HTMLImageElement) {
+            detail.complete = candidate.complete;
+            detail.naturalWidth = candidate.naturalWidth;
+            detail.naturalHeight = candidate.naturalHeight;
+          } else if (candidate instanceof HTMLVideoElement) {
+            detail.readyState = candidate.readyState;
+          } else if (candidate instanceof HTMLCanvasElement) {
+            detail.canvasWidth = candidate.width;
+            detail.canvasHeight = candidate.height;
+          }
+
+          logStep("Observed potential cover preview candidate, waiting for readiness.", detail);
         }
       }
     }
@@ -1348,270 +1388,355 @@ function dispatchBodyEvents(element, html) {
       inputType: "insertHTML"
     }));
 
-    async function applyCoverMetadata(coverImage, uploaderRoot, preview) {
-      const metadata = coverImage && typeof coverImage === "object" ? coverImage : {};
-      const modal = resolveCoverEditorModal(preview, uploaderRoot);
-      const searchRoot = modal || uploaderRoot || document;
-
-      await maybeApplyCoverAltText(searchRoot, metadata);
-      await maybeApplyCoverCaption(searchRoot, metadata);
-
-      const advanced = await advanceCoverEditor(searchRoot, modal);
-      if (advanced) {
-        logStep("Cover editor advanced after metadata application.");
-      } else {
-        logStep("Cover editor did not advance after metadata application.", "", "warn");
-      }
-    }
-
-    function resolveCoverEditorModal(preview, uploaderRoot) {
-      const candidates = [
-        preview instanceof HTMLElement ? preview.closest('.artdeco-modal') : null,
-        uploaderRoot instanceof HTMLElement ? uploaderRoot.closest('.artdeco-modal') : null,
-        findCoverEditorModal()
-      ];
-
-      for (const candidate of candidates) {
-        if (candidate instanceof HTMLElement) {
-          return candidate;
-        }
-      }
-
-      return null;
-    }
-
-    async function maybeApplyCoverAltText(root, metadata) {
-      const altText = metadata && typeof metadata.alt === "string" ? metadata.alt.trim() : "";
-      if (!altText) {
-        return;
-      }
-
-      const control = findCoverEditorControl(root, [
-        'textarea[aria-label*="alt text" i]',
-        'input[aria-label*="alt text" i]',
-        'textarea[id*="alt" i]',
-        'input[id*="alt" i]'
-      ]);
-
-      if (!control) {
-        logStep("Cover alt text control not found; skipping alt text application.", "", "warn");
-        return;
-      }
-
-      if (typeof control.value === "string" && control.value.trim() === altText) {
-        return;
-      }
-
-      setTextControlValue(control, altText);
-      logStep("Cover alt text applied to editor field.");
-    }
-
-    async function maybeApplyCoverCaption(root, metadata) {
-      const caption = metadata && typeof metadata.caption === "string" ? metadata.caption.trim() : "";
-      if (!caption) {
-        return;
-      }
-
-      const control = findCoverEditorControl(root, [
-        'textarea[aria-label*="caption" i]',
-        'input[aria-label*="caption" i]',
-        'textarea[id*="caption" i]',
-        'input[id*="caption" i]'
-      ]);
-
-      if (!control) {
-        logStep("Cover caption control not found; skipping caption application.", "", "warn");
-        return;
-      }
-
-      if (typeof control.value === "string" && control.value.trim() === caption) {
-        return;
-      }
-
-      setTextControlValue(control, caption);
-      logStep("Cover caption applied to editor field.");
-    }
-
-    function findCoverEditorControl(root, selectors) {
-      const queryRoot = root && typeof root.querySelector === "function" ? root : document;
-      for (const selector of selectors) {
-        const candidate = queryRoot.querySelector(selector);
-        if (candidate instanceof HTMLInputElement || candidate instanceof HTMLTextAreaElement) {
-          return candidate;
-        }
-      }
-      return null;
-    }
-
-    function setTextControlValue(control, value) {
-      if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement)) {
-        return;
-      }
-
-      const finalValue = typeof value === "string" ? value : "";
-
-      try {
-        control.focus({ preventScroll: false });
-      } catch (error) {
-        // Ignore focus issues.
-      }
-
-      control.value = finalValue;
-      control.dispatchEvent(new Event("input", { bubbles: true }));
-      control.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    async function advanceCoverEditor(searchRoot, modal) {
-      const root = searchRoot && typeof searchRoot.querySelector === "function" ? searchRoot : document;
-
-      const nextClicked = await clickCoverDialogButton(root, [
-        'button[aria-label="Next"]',
-        'button[data-test-modal-primary-btn="true"]'
-      ], {
-        description: "Next",
-        timeoutMs: 7000
-      });
-
-      if (!nextClicked) {
-        return false;
-      }
-
-      const closedAfterNext = modal ? await waitForCoverEditorToClose(modal, { timeoutMs: 6500 }) : true;
-      if (closedAfterNext) {
-        return true;
-      }
-
-      const applyClicked = await clickCoverDialogButton(root, [
-        'button[aria-label="Apply"]',
-        'button[aria-label="Save"]',
-        'button[aria-label="Done"]',
-        'button[data-test-modal-primary-btn="true"]'
-      ], {
-        description: "Apply",
-        timeoutMs: 6000
-      });
-
-      if (!applyClicked) {
-        return false;
-      }
-
-      return modal ? await waitForCoverEditorToClose(modal, { timeoutMs: 6500 }) : true;
-    }
-
-    async function clickCoverDialogButton(root, selectors, { description = "button", timeoutMs = 6000, intervalMs = 140 } = {}) {
-      const deadline = Date.now() + timeoutMs;
-      const queryRoot = root && typeof root.querySelector === "function" ? root : document;
-
-      while (Date.now() <= deadline) {
-        let sawButton = false;
-
-        for (const selector of selectors) {
-          const candidate = queryRoot.querySelector(selector);
-          if (!(candidate instanceof HTMLButtonElement)) {
-            continue;
-          }
-
-          sawButton = true;
-
-          if (isCoverButtonDisabled(candidate)) {
-            continue;
-          }
-
-          logStep(`Activating cover editor ${description.toLowerCase()} button.`, describeElement(candidate));
-          ensureElementInView(candidate);
-          safeActivate(candidate);
-          await sleep(220);
-          return true;
-        }
-
-        if (!sawButton) {
-          await sleep(intervalMs);
-        } else {
-          await sleep(Math.max(120, intervalMs));
-        }
-      }
-
-      logStep(`Cover editor ${description.toLowerCase()} button not available in time.`, "", "warn");
-      return false;
-    }
-
-    async function waitForCoverEditorToClose(modal, { timeoutMs = 6000, intervalMs = 150 } = {}) {
-      if (!(modal instanceof HTMLElement)) {
-        return true;
-      }
-
-      const deadline = Date.now() + timeoutMs;
-
-      while (Date.now() <= deadline) {
-        if (!modal.isConnected || !document.contains(modal)) {
-          return true;
-        }
-
-        let hidden = false;
-        try {
-          const style = window.getComputedStyle(modal);
-          hidden = style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0;
-        } catch (error) {
-          hidden = modal.offsetParent === null;
-        }
-
-        if (hidden) {
-          return true;
-        }
-
-        await sleep(intervalMs);
-      }
-
-      return false;
-    }
-
-    function isCoverButtonDisabled(button) {
-      if (!(button instanceof HTMLButtonElement)) {
-        return true;
-      }
-
-      const disabledAttr = button.hasAttribute("disabled") || button.getAttribute("aria-disabled") === "true";
-      const disabledClass = button.classList.contains("artdeco-button--disabled");
-      return button.disabled || disabledAttr || disabledClass;
-    }
-
-    function collectCoverQueryScopes(rootOrRoots) {
-      const scopes = new Set();
-
-      const shadowRootCtor = typeof ShadowRoot === "function" ? ShadowRoot : null;
-
-      const addScope = (candidate) => {
-        if (!candidate) {
-          return;
-        }
-        const isShadowRoot = shadowRootCtor && candidate instanceof shadowRootCtor;
-        if (candidate instanceof Document || candidate instanceof HTMLElement || isShadowRoot) {
-          if (typeof candidate.querySelector === "function") {
-            scopes.add(candidate);
-          }
-          return;
-        }
-        if (typeof candidate.querySelector === "function") {
-          scopes.add(candidate);
-        }
-      };
-
-      if (Array.isArray(rootOrRoots)) {
-        for (const candidate of rootOrRoots) {
-          addScope(candidate);
-        }
-      } else {
-        addScope(rootOrRoots);
-      }
-
-      return scopes;
-    }
-
   } catch (error) {
     // Some browsers may not support constructing InputEvent.
   }
 
   element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+async function applyCoverMetadata(coverImage, uploaderRoot, preview) {
+  const metadata = coverImage && typeof coverImage === "object" ? coverImage : {};
+  if (!preview) {
+    logStep("Proceeding with cover metadata application without explicit preview element; using fallback scopes.", "", "warn");
+  }
+  const modal = resolveCoverEditorModal(preview, uploaderRoot);
+  const searchRoot = modal || uploaderRoot || document;
+
+  await maybeApplyCoverAltText(searchRoot, metadata);
+  await maybeApplyCoverCaption(searchRoot, metadata);
+
+  const advanced = await advanceCoverEditor(searchRoot, modal);
+  if (advanced) {
+    logStep("Cover editor advanced after metadata application.");
+  } else {
+    logStep("Cover editor did not advance after metadata application.", "", "warn");
+  }
+}
+
+function resolveCoverEditorModal(preview, uploaderRoot) {
+  const candidates = [
+    preview instanceof HTMLElement ? preview.closest('.artdeco-modal') : null,
+    uploaderRoot instanceof HTMLElement ? uploaderRoot.closest('.artdeco-modal') : null,
+    findCoverEditorModal()
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate instanceof HTMLElement) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function maybeApplyCoverAltText(root, metadata) {
+  const altText = metadata && typeof metadata.alt === "string" ? metadata.alt.trim() : "";
+  if (!altText) {
+    return;
+  }
+
+  const control = findCoverEditorControl(root, [
+    'textarea[aria-label*="alt text" i]',
+    'input[aria-label*="alt text" i]',
+    'textarea[id*="alt" i]',
+    'input[id*="alt" i]'
+  ]);
+
+  if (!control) {
+    logStep("Cover alt text control not found; skipping alt text application.", "", "warn");
+    return;
+  }
+
+  if (typeof control.value === "string" && control.value.trim() === altText) {
+    return;
+  }
+
+  setTextControlValue(control, altText);
+  logStep("Cover alt text applied to editor field.");
+}
+
+async function maybeApplyCoverCaption(root, metadata) {
+  const caption = metadata && typeof metadata.caption === "string" ? metadata.caption.trim() : "";
+  if (!caption) {
+    return;
+  }
+
+  const control = findCoverEditorControl(root, [
+    'textarea[aria-label*="caption" i]',
+    'input[aria-label*="caption" i]',
+    'textarea[id*="caption" i]',
+    'input[id*="caption" i]'
+  ]);
+
+  if (!control) {
+    logStep("Cover caption control not found; skipping caption application.", "", "warn");
+    return;
+  }
+
+  if (typeof control.value === "string" && control.value.trim() === caption) {
+    return;
+  }
+
+  setTextControlValue(control, caption);
+  logStep("Cover caption applied to editor field.");
+}
+
+function findCoverEditorControl(root, selectors) {
+  const queryRoot = root && typeof root.querySelector === "function" ? root : document;
+  for (const selector of selectors) {
+    const candidate = queryRoot.querySelector(selector);
+    if (candidate instanceof HTMLInputElement || candidate instanceof HTMLTextAreaElement) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function setTextControlValue(control, value) {
+  if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement)) {
+    return;
+  }
+
+  const finalValue = typeof value === "string" ? value : "";
+
+  try {
+    control.focus({ preventScroll: false });
+  } catch (error) {
+    // Ignore focus issues.
+  }
+
+  control.value = finalValue;
+  control.dispatchEvent(new Event("input", { bubbles: true }));
+  control.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+async function advanceCoverEditor(searchRoot, modal) {
+  const root = searchRoot && typeof searchRoot.querySelector === "function" ? searchRoot : document;
+
+  const nextClicked = await clickCoverDialogButton(root, [
+    'button[aria-label="Next"]',
+    'button[data-test-modal-primary-btn="true"]'
+  ], {
+    description: "Next",
+    timeoutMs: 7000
+  });
+
+  if (!nextClicked) {
+    return false;
+  }
+
+  const closedAfterNext = modal ? await waitForCoverEditorToClose(modal, { timeoutMs: 6500 }) : true;
+  if (closedAfterNext) {
+    return true;
+  }
+
+  const applyClicked = await clickCoverDialogButton(root, [
+    'button[aria-label="Apply"]',
+    'button[aria-label="Save"]',
+    'button[aria-label="Done"]',
+    'button[data-test-modal-primary-btn="true"]'
+  ], {
+    description: "Apply",
+    timeoutMs: 6000
+  });
+
+  if (!applyClicked) {
+    return false;
+  }
+
+  return modal ? await waitForCoverEditorToClose(modal, { timeoutMs: 6500 }) : true;
+}
+
+async function clickCoverDialogButton(root, selectors, { description = "button", timeoutMs = 6000, intervalMs = 140 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const queryRoot = root && typeof root.querySelector === "function" ? root : document;
+
+  while (Date.now() <= deadline) {
+    let sawButton = false;
+
+    for (const selector of selectors) {
+      const candidate = queryRoot.querySelector(selector);
+      if (!(candidate instanceof HTMLButtonElement)) {
+        continue;
+      }
+
+      sawButton = true;
+
+      if (isCoverButtonDisabled(candidate)) {
+        continue;
+      }
+
+      logStep(`Activating cover editor ${description.toLowerCase()} button.`, describeElement(candidate));
+      ensureElementInView(candidate);
+      safeActivate(candidate);
+      await sleep(220);
+      return true;
+    }
+
+    if (!sawButton) {
+      await sleep(intervalMs);
+    } else {
+      await sleep(Math.max(120, intervalMs));
+    }
+  }
+
+  logStep(`Cover editor ${description.toLowerCase()} button not available in time.`, "", "warn");
+  return false;
+}
+
+async function waitForCoverEditorToClose(modal, { timeoutMs = 6000, intervalMs = 150 } = {}) {
+  if (!(modal instanceof HTMLElement)) {
+    return true;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    if (!modal.isConnected || !document.contains(modal)) {
+      return true;
+    }
+
+    let hidden = false;
+    try {
+      const style = window.getComputedStyle(modal);
+      hidden = style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0;
+    } catch (error) {
+      hidden = modal.offsetParent === null;
+    }
+
+    if (hidden) {
+      return true;
+    }
+
+    await sleep(intervalMs);
+  }
+
+  return false;
+}
+
+function isCoverButtonDisabled(button) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return true;
+  }
+
+  const disabledAttr = button.hasAttribute("disabled") || button.getAttribute("aria-disabled") === "true";
+  const disabledClass = button.classList.contains("artdeco-button--disabled");
+  return button.disabled || disabledAttr || disabledClass;
+}
+
+function collectCoverQueryScopes(rootOrRoots) {
+  const scopes = new Set();
+
+  const shadowRootCtor = typeof ShadowRoot === "function" ? ShadowRoot : null;
+
+  const addScope = (candidate) => {
+    if (!candidate) {
+      return;
+    }
+    const isShadowRoot = shadowRootCtor && candidate instanceof shadowRootCtor;
+    if (candidate instanceof Document || candidate instanceof HTMLElement || isShadowRoot) {
+      if (typeof candidate.querySelector === "function") {
+        scopes.add(candidate);
+      }
+      return;
+    }
+    if (typeof candidate.querySelector === "function") {
+      scopes.add(candidate);
+    }
+  };
+
+  if (Array.isArray(rootOrRoots)) {
+    for (const candidate of rootOrRoots) {
+      addScope(candidate);
+    }
+  } else {
+    addScope(rootOrRoots);
+  }
+
+  return scopes;
+}
+
+function resolveReadyCoverPreviewElement(candidate) {
+  if (!(candidate instanceof Element) || !candidate.isConnected) {
+    return null;
+  }
+
+  if (isCoverPreviewReady(candidate)) {
+    return candidate;
+  }
+
+  if (candidate instanceof HTMLElement) {
+    const mediaNodes = candidate.querySelectorAll('img, video, canvas');
+    for (const node of mediaNodes) {
+      const ready = resolveReadyCoverPreviewElement(node);
+      if (ready) {
+        return ready;
+      }
+    }
+
+    const nestedContainers = candidate.querySelectorAll('[data-test-cover-media-preview], .media-editor__preview, .media-editor-cover-preview');
+    for (const container of nestedContainers) {
+      if (container === candidate) {
+        continue;
+      }
+      const ready = resolveReadyCoverPreviewElement(container);
+      if (ready) {
+        return ready;
+      }
+    }
+  }
+
+  return null;
+}
+
+function isCoverPreviewReady(element) {
+  if (!(element instanceof Element)) {
+    return false;
+  }
+
+  const svgElementCtor = typeof SVGElement === "function" ? SVGElement : null;
+
+  if (element instanceof HTMLImageElement) {
+    if (!element.complete) {
+      return false;
+    }
+    return element.naturalWidth > 0 && element.naturalHeight > 0;
+  }
+
+  if (element instanceof HTMLVideoElement) {
+    return element.readyState >= 1 && element.videoWidth > 0 && element.videoHeight > 0;
+  }
+
+  if (element instanceof HTMLCanvasElement) {
+    return element.width > 0 && element.height > 0;
+  }
+
+  if (svgElementCtor && element instanceof svgElementCtor) {
+    const viewBox = element.getAttribute("viewBox");
+    return typeof viewBox === "string" && viewBox.trim().length > 0;
+  }
+
+  if (element instanceof HTMLElement) {
+    const dataset = element.dataset || {};
+    if (typeof dataset.coverPreviewReady === "string" && dataset.coverPreviewReady.toLowerCase() === "true") {
+      return true;
+    }
+
+    try {
+      const computed = window.getComputedStyle(element);
+      if (computed) {
+        const bgImage = computed.backgroundImage || "";
+        if (typeof bgImage === "string" && bgImage.includes("url(")) {
+          return true;
+        }
+      }
+    } catch (error) {
+      // Ignore style access issues.
+    }
+  }
+
+  return false;
 }
 
 function resolveBodyHtml(html, fallbackText) {
