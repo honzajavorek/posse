@@ -25,6 +25,100 @@ const nextFrame = () => new Promise((resolve) => {
   }
 });
 
+function randomIntBetween(min, max) {
+  const boundedMin = Number.isFinite(min) ? min : 0;
+  const boundedMax = Number.isFinite(max) ? max : boundedMin;
+  const lower = Math.ceil(Math.min(boundedMin, boundedMax));
+  const upper = Math.floor(Math.max(boundedMin, boundedMax));
+  if (upper <= lower) {
+    return Math.max(0, lower);
+  }
+  return Math.floor(Math.random() * (upper - lower + 1)) + lower;
+}
+
+async function humanPause(label = "", { minMs = 650, maxMs = 1100 } = {}) {
+  const duration = Math.max(0, randomIntBetween(minMs, maxMs));
+  if (duration > 0) {
+    const message = label ? `Pausing briefly ${label}.` : "Pausing briefly.";
+    logStep(message, `${duration}ms`);
+    await sleep(duration);
+  }
+  return duration;
+}
+
+async function waitForDraftSync({ reason = "", minWaitMs = 900, timeoutMs = 15000, pollIntervalMs = 220 } = {}) {
+  const label = reason ? ` (${reason})` : "";
+  logStep(`Waiting for LinkedIn autosave${label}.`);
+
+  const start = Date.now();
+  const deadline = start + Math.max(timeoutMs, minWaitMs);
+  const savedRegex = /\b(saved|up to date|synced|draft saved|all changes saved|changes saved)\b/i;
+  const savingRegex = /\b(saving|syncing|working|uploading)\b/i;
+  const statusSelectors = [
+    '[data-test-editor-status-text]',
+    '[data-test-save-state]',
+    '[data-test-editor-save-state]',
+    '[data-test-editor-status-indicator]',
+    '.article-editor__save-state',
+    '.article-editor__autosave-state',
+    '.editor-save-state',
+    '.artdeco-inline-feedback__message',
+    '.global-alert-container',
+    '.toast-content'
+  ];
+
+  let savedDetected = false;
+  let lastSavingSeen = 0;
+
+  while (Date.now() <= deadline) {
+    let cycleSawSaved = false;
+
+    for (const selector of statusSelectors) {
+      const nodes = document.querySelectorAll(selector);
+      for (const node of nodes) {
+        if (!(node instanceof Element) || !node.isConnected) {
+          continue;
+        }
+
+        const text = (node.textContent || "").trim();
+        if (!text) {
+          continue;
+        }
+
+        if (savingRegex.test(text)) {
+          lastSavingSeen = Date.now();
+        }
+
+        if (savedRegex.test(text)) {
+          cycleSawSaved = true;
+          savedDetected = true;
+        }
+      }
+    }
+
+    const elapsed = Date.now() - start;
+    if (cycleSawSaved && elapsed >= minWaitMs) {
+      if (elapsed - lastSavingSeen >= pollIntervalMs * 2) {
+        logStep(`LinkedIn autosave confirmed${label}.`);
+        return true;
+      }
+    }
+
+    await sleep(pollIntervalMs);
+  }
+
+  const totalElapsed = Date.now() - start;
+  if (totalElapsed < minWaitMs) {
+    await sleep(minWaitMs - totalElapsed);
+  }
+
+  const detail = savedDetected
+    ? "Saved indicator observed without final confirmation."
+    : "Autosave indicator not observed before timeout.";
+  logStep(`LinkedIn autosave wait finished${label}.`, detail, savedDetected ? "info" : "warn");
+  return savedDetected;
+}
+
 function describeElement(element) {
   if (!(element instanceof Element)) {
     return "unknown";
@@ -147,11 +241,13 @@ function suppressFileDialogTemporarily() {
     const preferredTitle = response.title || response.sourceUrl || "";
     const preparedBodyHtml = resolveBodyHtml(response.bodyHtml || "", response.sourceUrl || "");
     const preparedBodyText = extractPlainText(preparedBodyHtml);
+    const coverImage = response.coverImage || null;
 
     stageTitle(titleField, preferredTitle);
     logStep("Title injected.");
 
-    const coverPromise = stageCoverImage(response.coverImage || null);
+    await waitForDraftSync({ reason: "after title" });
+    await humanPause("before preparing body content");
 
     if (!preparedBodyHtml) {
       logStep("No body content available, skipping body injection.", "", "warn");
@@ -167,6 +263,8 @@ function suppressFileDialogTemporarily() {
 
     logStep("Located hydrated body editor.");
 
+    await humanPause("before staging body content");
+
     const injected = await stageBody(hydratedBodyField, preparedBodyHtml, preparedBodyText, true);
 
     if (!injected) {
@@ -177,8 +275,15 @@ function suppressFileDialogTemporarily() {
     maintainBodyContent(preparedBodyHtml, preparedBodyText);
     logStep("Body content staged and maintenance watcher active.");
 
-    await coverPromise;
-    logStep("Cover staging flow completed.");
+    await waitForDraftSync({ reason: "after body" });
+
+    if (coverImage) {
+      await humanPause("before staging cover image");
+      await stageCoverImage(coverImage);
+      logStep("Cover staging flow completed.");
+    } else {
+      logStep("Cover staging skipped (no cover image).");
+    }
   } catch (error) {
     logStep("Failed to inject LinkedIn content", error, "error");
   }
