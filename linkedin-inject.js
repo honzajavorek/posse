@@ -158,6 +158,27 @@ function ensureElementInView(element) {
   }
 }
 
+function scrollDocumentToTop({ behavior = "auto" } = {}) {
+  try {
+    if (typeof window.scrollTo === "function") {
+      window.scrollTo({ top: 0, left: 0, behavior });
+      return true;
+    }
+    const root = document.documentElement || document.body;
+    if (root) {
+      root.scrollTop = 0;
+      if (root !== document.body && document.body) {
+        document.body.scrollTop = 0;
+      }
+      return true;
+    }
+  } catch (error) {
+    // Ignore scroll failures.
+  }
+
+  return false;
+}
+
 function suppressFileDialogTemporarily() {
   const proto = HTMLInputElement && HTMLInputElement.prototype ? HTMLInputElement.prototype : null;
   if (!proto) {
@@ -284,6 +305,20 @@ function suppressFileDialogTemporarily() {
 
     maintainBodyContent(preparedBodyHtml, preparedBodyText);
     logStep("Body content staged and maintenance watcher active.");
+
+    const cursorPositioned = positionBodyCursorAtStart(hydratedBodyField);
+    if (cursorPositioned) {
+      logStep("Body editor cursor positioned at start after staging.");
+    } else {
+      logStep("Unable to position body editor cursor at start after staging.", "", "warn");
+    }
+
+    await sleep(600);
+    if (scrollDocumentToTop({ behavior: "auto" })) {
+      logStep("Scrolled page to top after body staging.");
+    } else {
+      logStep("Unable to scroll page to top after body staging.", "", "warn");
+    }
 
     await waitForDraftSync({ reason: "after body" });
 
@@ -486,6 +521,25 @@ async function stageCoverImage(coverImage) {
     await applyCoverMetadata(coverImage, uploaderRoot, null);
 
     await maybeApplyCoverCaptionInArticleEditor(coverImage);
+
+    const hydratedBodyField = await waitForHydratedBodyField({ idleMs: 320, timeoutMs: 4000 });
+    if (hydratedBodyField) {
+      const cursorPositioned = positionBodyCursorAtStart(hydratedBodyField);
+      if (cursorPositioned) {
+        logStep("Body editor cursor repositioned at start after cover upload.");
+      } else {
+        logStep("Unable to reposition body editor cursor after cover upload.", "", "warn");
+      }
+
+      await sleep(600);
+      if (scrollDocumentToTop({ behavior: "auto" })) {
+        logStep("Scrolled page to top after cover upload.");
+      } else {
+        logStep("Unable to scroll page to top after cover upload.", "", "warn");
+      }
+    } else {
+      logStep("Unable to refocus body editor after cover upload.", "", "warn");
+    }
   } catch (error) {
     logStep("Failed to stage cover image", error, "error");
   }
@@ -1486,6 +1540,38 @@ function selectAllIn(element) {
   range.selectNodeContents(element);
   selection.addRange(range);
   return true;
+}
+
+function positionBodyCursorAtStart(field) {
+  if (!(field instanceof HTMLElement) || !field.isContentEditable) {
+    return false;
+  }
+
+  try {
+    field.focus({ preventScroll: false });
+  } catch (error) {
+    try {
+      field.focus();
+    } catch (focusError) {
+      // ignore inability to focus
+    }
+  }
+
+  const selection = window.getSelection();
+  if (!selection) {
+    return false;
+  }
+
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(field);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  } catch (error) {
+    return false;
+  }
 }
 
 function dispatchBodyEvents(element, html) {
