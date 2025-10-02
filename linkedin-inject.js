@@ -484,6 +484,8 @@ async function stageCoverImage(coverImage) {
     logStep("Cover image injected into file input; waiting for cover editor controls to become active.");
 
     await applyCoverMetadata(coverImage, uploaderRoot, null);
+
+    await maybeApplyCoverCaptionInArticleEditor(coverImage);
   } catch (error) {
     logStep("Failed to stage cover image", error, "error");
   }
@@ -1520,6 +1522,58 @@ async function applyCoverMetadata(coverImage, uploaderRoot, preview) {
   } else {
     logStep("Cover editor did not advance after metadata application.", "", "warn");
   }
+}
+
+async function maybeApplyCoverCaptionInArticleEditor(coverImage, { timeoutMs = 5000, intervalMs = 140 } = {}) {
+  const metadata = coverImage && typeof coverImage === "object" ? coverImage : {};
+  const caption = typeof metadata.caption === "string" ? metadata.caption.trim() : "";
+  if (!caption) {
+    return false;
+  }
+
+  const field = await waitForCoverCaptionField({ timeoutMs, intervalMs });
+  if (!(field instanceof HTMLTextAreaElement) || !field.isConnected) {
+    logStep("Cover caption field in article editor not found; skipping caption application.", "", "warn");
+    return false;
+  }
+
+  const maxLengthAttr = field.getAttribute("maxlength");
+  const maxLength = maxLengthAttr ? Number.parseInt(maxLengthAttr, 10) : NaN;
+  const effectiveCaption = Number.isFinite(maxLength) && maxLength > 0
+    ? caption.slice(0, maxLength)
+    : caption;
+
+  if (typeof field.value === "string" && field.value.trim() === effectiveCaption) {
+    return true;
+  }
+
+  setTextControlValue(field, effectiveCaption);
+  logStep("Cover caption applied to article editor field.");
+  return true;
+}
+
+async function waitForCoverCaptionField({ timeoutMs = 5000, intervalMs = 140 } = {}) {
+  const selectors = [
+    'textarea[aria-label="Add credit and caption"]',
+    'textarea[placeholder="Add credit and caption"]',
+    'textarea[aria-label*="credit" i]',
+    'textarea[aria-label*="caption" i]',
+    'textarea.article-editor-cover-image-v2__caption'
+  ];
+
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    for (const selector of selectors) {
+      const field = document.querySelector(selector);
+      if (field instanceof HTMLTextAreaElement && field.isConnected) {
+        return field;
+      }
+    }
+    await sleep(intervalMs);
+  }
+
+  return null;
 }
 
 function resolveCoverEditorModal(preview, uploaderRoot) {
