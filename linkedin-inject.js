@@ -388,8 +388,13 @@ function suppressFileDialogTemporarily() {
       logStep("Cover staging skipped (no cover image).");
     }
 
-    await waitForDraftSync({ reason: "before share dialog" });
-    await humanPause("before opening share dialog", { minMs: 220, maxMs: 420 });
+    const autosavedBeforeShare = await waitForDraftSync({ reason: "before share dialog" });
+    if (!autosavedBeforeShare) {
+      await humanPause("after autosave warning", { minMs: 600, maxMs: 1000 });
+      await waitForDraftSync({ reason: "before share dialog retry", minWaitMs: 600, timeoutMs: 5500, pollIntervalMs: 160 });
+    }
+
+    await humanPause("before opening share dialog", { minMs: 260, maxMs: 480 });
     await triggerPublishDialogAndPrefill("Hello");
   } catch (error) {
     logStep("Failed to inject LinkedIn content", error, "error");
