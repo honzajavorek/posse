@@ -1,6 +1,6 @@
 # POSSE Firefox Extension
 
-POSSE ("Publish on your Own Site, Syndicate Elsewhere") is a minimal Firefox browser extension that helps you share links from your blog to a specific Discord channel with a single click. It opens the Discord channel in a new tab and pre-populates the message composer with the URL of the page you were viewing.
+POSSE ("Publish on your Own Site, Syndicate Elsewhere") is a minimal Firefox browser extension that helps me share my publications to places behind specific walled gardens.
 
 ## Features
 
