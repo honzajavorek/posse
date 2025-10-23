@@ -40,29 +40,15 @@ The extension icon (default puzzle-piece) will appear in your toolbar. Pin it if
 3. A new tab opens with the specified Discord channel. Once the page finishes loading, the message box is populated with your blog post URL—review and press Enter (or click Send) when ready.
 4. A LinkedIn article editor tab opens (in the background) with the headline field pre-filled and the body populated using the blog post content. Switch to it when you're ready to continue drafting or editing.
 
-## Local Development with `web-ext`
+## Run Locally in Your Firefox Profile
 
-If you iterate on the code frequently, Mozilla's [`web-ext`](https://extensionworkshop.com/documentation/develop/web-ext-command-reference/) CLI can auto-reload the extension as you save changes.
+These steps load the extension inside your everyday Firefox profile without relying on extra tooling. Because Mozilla requires signed add-ons for permanent installation, this approach uses Firefox's temporary add-on loader—you'll need to repeat it after each browser restart.
 
-### 1. Install `web-ext`
-
-```bash
-npm install --global web-ext
-```
-
-### 2. Run the extension with live reloading
-
-From the project root:
-
-```bash
-web-ext run --target=firefox-desktop --firefox="$(ls -1 /Applications/Firefox.app/Contents/MacOS/firefox)"
-```
-
-`web-ext` launches a dedicated Firefox profile, installs the extension, and watches this directory. Each time you edit a file, it automatically reloads the extension—no need to revisit `about:debugging`.
-
-### 3. Stop the session
-
-Press `Ctrl+C` in the terminal to shut down the `web-ext` runner. Firefox closes along with it, leaving your main profile untouched.
+1. Clone or download this repository somewhere on your machine.
+2. Open Firefox and navigate to `about:debugging#/runtime/this-firefox`.
+3. Click **Load Temporary Add-on…** and pick the `manifest.json` file located in the project directory.
+4. Firefox immediately installs the extension into your current profile. Pin its icon from the toolbar overflow menu if you want it visible.
+5. Keep Firefox running while you work. If you restart the browser, revisit `about:debugging` and load the add-on again.
 
 ## Notes & Limitations
 
@@ -74,13 +60,5 @@ Press `Ctrl+C` in the terminal to shut down the `web-ext` runner. Firefox closes
 - The first in-article image must match the page’s `og:image`; otherwise the workflow aborts so the LinkedIn cover can stay in sync with the blog.
 - No data is persisted; everything happens in-memory on each click.
 - The extension is configured for the specific Discord channel mentioned above. Update `TARGET_DISCORD_URL` in `background.js` to point elsewhere if desired.
-
-## Customization Tips
-
-- Update the `browser_action.default_title` in `manifest.json` if you'd like a different tooltip.
-- Consider adding icons under an `icons/` directory and referencing them from the manifest for a personalized toolbar button.
-- Tweak `TARGET_DISCORD_URL` or `TARGET_LINKEDIN_URL` in `background.js` to point the extension at different destinations.
-- Rewrite the DOM hooks in `scrape-article.js` if you want to adapt the extension to a different site structure.
-- You can adjust polling intervals or attempt counts in `discord-inject.js` if the message composer loads slowly on your system.
 
 Happy syndicating!
