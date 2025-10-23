@@ -42,13 +42,31 @@ The extension icon (default puzzle-piece) will appear in your toolbar. Pin it if
 
 ## Run Locally in Your Firefox Profile
 
-These steps load the extension inside your everyday Firefox profile without relying on extra tooling. Because Mozilla requires signed add-ons for permanent installation, this approach uses Firefox's temporary add-on loader—you'll need to repeat it after each browser restart.
+These steps load the extension inside your everyday Firefox profile without relying on extra tooling. Because Mozilla requires signed add-ons for permanent installation, this approach uses Firefox's temporary add-on loader—perfect for quick spot checks, but it needs to be repeated after each browser restart.
 
 1. Clone or download this repository somewhere on your machine.
-2. Open Firefox and navigate to `about:debugging#/runtime/this-firefox`.
+2. Open Firefox and navigate to [about:debugging#/runtime/this-firefox](about:debugging#/runtime/this-firefox).
 3. Click **Load Temporary Add-on…** and pick the `manifest.json` file located in the project directory.
 4. Firefox immediately installs the extension into your current profile. Pin its icon from the toolbar overflow menu if you want it visible.
-5. Keep Firefox running while you work. If you restart the browser, revisit `about:debugging` and load the add-on again.
+5. Keep Firefox running while you work. If you restart the browser, revisit [about:debugging#/runtime/this-firefox](about:debugging#/runtime/this-firefox) and load the add-on again, or follow the permanent installation steps below.
+
+## Permanent Installation (Signed Add-on)
+
+To keep the extension installed across browser restarts, Firefox requires a signed `.xpi`. Mozilla offers automated signing for self-hosted extensions via AMO's “unlisted” channel. High-level workflow:
+
+1. Create a Firefox Add-on Developer account at [https://addons.mozilla.org](https://addons.mozilla.org) (free).
+2. Install the [`web-ext`](https://extensionworkshop.com/documentation/develop/web-ext-command-reference/) CLI locally if you don't already have it:
+	```bash
+	npm install --global web-ext
+	```
+3. From the project root, request an unlisted signature. The command bundles the extension, uploads it to AMO, and returns a signed `.xpi`:
+	```bash
+	web-ext sign --api-key "$AMO_JWT_ISSUER" --api-secret "$AMO_JWT_SECRET" --channel unlisted
+	```
+	Create API credentials on AMO under **Tools > Manage API Keys**, then export them as environment variables before running the command.
+4. After the signing completes, download the generated `.xpi` from the output link (or from `./web-ext-artifacts/`).
+5. In Firefox, open the downloaded `.xpi`. Approve the installation prompt. The extension now persists like any other add-on, and you can distribute the signed file privately.
+6. Whenever you change the code, rerun `web-ext sign` to produce an updated signed package before reinstalling.
 
 ## Notes & Limitations
 
