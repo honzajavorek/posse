@@ -61,7 +61,7 @@ browserApi.browserAction.onClicked.addListener(async (activeTab) => {
       throw validationError;
     }
 
-    let scraped = { url: tabDetails ? tabDetails.url : undefined, title: tabDetails ? tabDetails.title : undefined, bodyHtml: "", coverImage: null };
+  let scraped = { url: tabDetails ? tabDetails.url : undefined, title: tabDetails ? tabDetails.title : undefined, bodyHtml: "", coverImage: null, metaDescription: "" };
 
     if (tabDetails && typeof tabDetails.id === "number") {
       try {
@@ -74,7 +74,8 @@ browserApi.browserAction.onClicked.addListener(async (activeTab) => {
             url: typeof result.url === "string" && result.url ? result.url : scraped.url,
             title: typeof result.title === "string" && result.title ? result.title : scraped.title,
             bodyHtml: typeof result.bodyHtml === "string" ? result.bodyHtml : "",
-            coverImage: result.coverImage && typeof result.coverImage === "object" ? result.coverImage : null
+            coverImage: result.coverImage && typeof result.coverImage === "object" ? result.coverImage : null,
+            metaDescription: typeof result.metaDescription === "string" ? result.metaDescription : ""
           };
         }
       } catch (scrapeError) {
@@ -105,7 +106,8 @@ browserApi.browserAction.onClicked.addListener(async (activeTab) => {
       sourceUrl,
       sourceTitle: sourceTitle || "",
       bodyHtml: scraped.bodyHtml || "",
-      coverImage: scraped.coverImage || null
+      coverImage: scraped.coverImage || null,
+      metaDescription: scraped.metaDescription || ""
     };
 
     const discordTab = await browserApi.tabs.create({
@@ -201,7 +203,8 @@ browserApi.runtime.onMessage.addListener((message, sender) => {
       title: details.payload.sourceTitle || "",
       sourceUrl: details.payload.sourceUrl || "",
       bodyHtml: details.payload.bodyHtml || "",
-      coverImage: details.payload.coverImage || null
+      coverImage: details.payload.coverImage || null,
+      metaDescription: details.payload.metaDescription || ""
     });
   }
 

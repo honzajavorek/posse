@@ -321,8 +321,9 @@ function suppressFileDialogTemporarily() {
     logStep("Located LinkedIn article title input.");
 
     const preferredTitle = response.title || response.sourceUrl || "";
-    const preparedBodyHtml = resolveBodyHtml(response.bodyHtml || "", response.sourceUrl || "");
-    const preparedBodyText = extractPlainText(preparedBodyHtml);
+  const preparedBodyHtml = resolveBodyHtml(response.bodyHtml || "", response.sourceUrl || "");
+  const preparedBodyText = extractPlainText(preparedBodyHtml);
+  const preparedShareMessage = resolveShareMessage(response);
     const coverImage = response.coverImage || null;
     const newsletterName = resolveNewsletterName(response.sourceUrl || "");
 
@@ -395,7 +396,7 @@ function suppressFileDialogTemporarily() {
     }
 
     await humanPause("before opening share dialog", { minMs: 260, maxMs: 480 });
-    await triggerPublishDialogAndPrefill("Hello");
+  await triggerPublishDialogAndPrefill(preparedShareMessage);
   } catch (error) {
     logStep("Failed to inject LinkedIn content", error, "error");
   }
@@ -2408,12 +2409,41 @@ function maintainBodyContent(html, plainText, { durationMs = 12000 } = {}) {
   setTimeout(() => tryRestoreBody(html, plainText, false), 1400);
 
 }
+function resolveShareMessage(metadata) {
+  if (!metadata || typeof metadata !== "object") {
+    return "";
+  }
 
-async function triggerPublishDialogAndPrefill(message = "Hello", { maxAttempts = 2 } = {}) {
-  const finalMessage = typeof message === "string" ? message : "";
+  const candidates = [
+    metadata.metaDescription,
+    metadata.description,
+    metadata.summary
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+
+  return "";
+}
+
+
+async function triggerPublishDialogAndPrefill(message = "", { maxAttempts = 2 } = {}) {
+  const finalMessage = typeof message === "string" ? message.trim() : "";
+  const shouldPrefill = finalMessage.length > 0;
 
   const preExistingDialog = findOpenShareDialog();
   if (preExistingDialog) {
+    if (!shouldPrefill) {
+      logStep("Share dialog already open; leaving message for manual entry.");
+      return true;
+    }
+
     const existingField = findShareDialogMessageField(preExistingDialog);
     if (existingField) {
       const applied = applyShareDialogMessage(existingField, finalMessage);
@@ -2443,6 +2473,11 @@ async function triggerPublishDialogAndPrefill(message = "Hello", { maxAttempts =
       logStep("Share dialog text field not detected after clicking Next.", "", "warn");
       await humanPause("before retrying share dialog open", { minMs: 180, maxMs: 320 });
       continue;
+    }
+
+    if (!shouldPrefill) {
+      logStep("Share dialog opened without auto message (no description available).");
+      return true;
     }
 
     await humanPause("before typing share dialog message", { minMs: 160, maxMs: 320 });

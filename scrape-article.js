@@ -60,6 +60,26 @@
     return absolute;
   }
 
+  function getMetaDescription() {
+    const selectors = [
+      'meta[name="description"][content]',
+      'meta[property="og:description"][content]',
+      'meta[name="twitter:description"][content]'
+    ];
+
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      if (node && typeof node.content === "string") {
+        const trimmed = node.content.trim();
+        if (trimmed) {
+          return trimmed;
+        }
+      }
+    }
+
+    return "";
+  }
+
   function getArticleRoot() {
     const article = document.querySelector("article.article");
     if (!article) {
@@ -401,6 +421,7 @@
     url: getCanonicalUrl(),
     title: getArticleTitle(articleElement),
     bodyHtml: articleClone.innerHTML,
-    coverImage
+    coverImage,
+    metaDescription: getMetaDescription()
   };
 })();
