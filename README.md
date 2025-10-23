@@ -45,10 +45,10 @@ The extension icon (default puzzle-piece) will appear in your toolbar. Pin it if
 These steps load the extension inside your everyday Firefox profile without relying on extra tooling. Because Mozilla requires signed add-ons for permanent installation, this approach uses Firefox's temporary add-on loader—perfect for quick spot checks, but it needs to be repeated after each browser restart.
 
 1. Clone or download this repository somewhere on your machine.
-2. Open Firefox and navigate to [about:debugging#/runtime/this-firefox](about:debugging#/runtime/this-firefox).
+2. Open Firefox and navigate to `about:debugging#/runtime/this-firefox`.
 3. Click **Load Temporary Add-on…** and pick the `manifest.json` file located in the project directory.
 4. Firefox immediately installs the extension into your current profile. Pin its icon from the toolbar overflow menu if you want it visible.
-5. Keep Firefox running while you work. If you restart the browser, revisit [about:debugging#/runtime/this-firefox](about:debugging#/runtime/this-firefox) and load the add-on again, or follow the permanent installation steps below.
+5. Keep Firefox running while you work. If you restart the browser, revisit `about:debugging#/runtime/this-firefox` and load the add-on again, or follow the permanent installation steps below.
 
 ## Permanent Installation (Signed Add-on)
 
