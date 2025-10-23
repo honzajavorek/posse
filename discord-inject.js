@@ -47,20 +47,25 @@ function waitForComposer(maxAttempts = 30, delayMs = 250) {
 
 function stageMessage(element, message) {
   focusComposer(element);
-  const inserted = replaceComposerContent(element, message);
+  const stagedMessage = message.startsWith(" ") ? message : ` ${message}`;
+  const inserted = replaceComposerContent(element, stagedMessage);
 
   if (!inserted) {
-    element.textContent = message;
+    element.textContent = stagedMessage;
   }
 
-  collapseSelectionToEnd(element);
+  collapseSelectionToStart(element);
 
   element.dispatchEvent(new InputEvent("input", {
     bubbles: true,
     cancelable: true,
-    data: message,
+    data: stagedMessage,
     inputType: "insertText"
   }));
+
+  requestAnimationFrame(() => {
+    collapseSelectionToStart(element);
+  });
 }
 
 function focusComposer(element) {
@@ -88,7 +93,7 @@ function replaceComposerContent(element, message) {
   return insertedHtml;
 }
 
-function collapseSelectionToEnd(element) {
+function collapseSelectionToStart(element) {
   const selection = window.getSelection();
   if (!selection) {
     return;
@@ -97,6 +102,6 @@ function collapseSelectionToEnd(element) {
   selection.removeAllRanges();
   const range = document.createRange();
   range.selectNodeContents(element);
-  range.collapse(false);
+  range.collapse(true);
   selection.addRange(range);
 }
