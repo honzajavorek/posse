@@ -273,12 +273,19 @@ function suppressFileDialogTemporarily() {
     const preparedBodyHtml = resolveBodyHtml(response.bodyHtml || "", response.sourceUrl || "");
     const preparedBodyText = extractPlainText(preparedBodyHtml);
     const coverImage = response.coverImage || null;
+    const newsletterName = resolveNewsletterName(response.sourceUrl || "");
 
     stageTitle(titleField, preferredTitle);
     logStep("Title injected.");
 
     await waitForDraftSync({ reason: "after title" });
     await humanPause("before preparing body content");
+
+    if (newsletterName) {
+      await ensureNewsletterSelection(newsletterName);
+    } else {
+      logStep("Newsletter selection skipped (no matching newsletter).");
+    }
 
     if (!preparedBodyHtml) {
       logStep("No body content available, skipping body injection.", "", "warn");
@@ -337,6 +344,139 @@ function suppressFileDialogTemporarily() {
 async function waitForTitleField(maxAttempts = DEFAULT_WAIT_ATTEMPTS, delayMs = DEFAULT_WAIT_DELAY_MS) {
   const candidate = await waitForElement("#article-editor-headline__textarea", document, maxAttempts, delayMs);
   return candidate instanceof HTMLTextAreaElement ? candidate : null;
+}
+
+function resolveNewsletterName(sourceUrl) {
+  try {
+    if (!sourceUrl) {
+      return null;
+    }
+    const parsed = new URL(sourceUrl);
+    if (parsed.hostname && parsed.hostname.includes("honzajavorek.cz")) {
+      return "Javorové lístky";
+    }
+  } catch (error) {
+    // Ignore URL parsing issues.
+  }
+  return null;
+}
+
+async function ensureNewsletterSelection(newsletterName, { maxAttempts = 3 } = {}) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const alreadySelected = await verifyNewsletterSelection(newsletterName);
+    if (alreadySelected) {
+      if (attempt > 1) {
+        logStep(`Newsletter \"${newsletterName}\" already selected after retry.`);
+      } else {
+        logStep(`Newsletter \"${newsletterName}\" already selected.`);
+      }
+      return true;
+    }
+
+    const button = await waitForNewsletterButton();
+    if (!button) {
+      logStep("Newsletter toggle button not found.", "", "warn");
+      return false;
+    }
+
+    ensureElementInView(button);
+    button.click();
+    await humanPause("after opening newsletter dropdown", { minMs: 180, maxMs: 320 });
+
+    const option = await waitForNewsletterOption(newsletterName, { timeoutMs: 2200 });
+    if (!option) {
+      logStep(`Newsletter option \"${newsletterName}\" not found in dropdown.`, "", "warn");
+      await humanPause("before retrying newsletter selection", { minMs: 160, maxMs: 280 });
+      continue;
+    }
+
+    ensureElementInView(option);
+    option.click();
+    logStep(`Clicked newsletter option \"${newsletterName}\".`);
+
+    await humanPause("after selecting newsletter", { minMs: 200, maxMs: 360 });
+
+    const verified = await verifyNewsletterSelection(newsletterName);
+    if (verified) {
+      logStep(`Verified newsletter selection \"${newsletterName}\".`);
+      return true;
+    }
+
+    logStep(`Newsletter selection \"${newsletterName}\" not confirmed, retrying.`, "", "warn");
+    await humanPause("before retrying newsletter selection", { minMs: 220, maxMs: 420 });
+  }
+
+  logStep(`Unable to confirm newsletter selection \"${newsletterName}\" after retries.`, "", "warn");
+  return false;
+}
+
+async function waitForNewsletterButton({ timeoutMs = 3000, intervalMs = 120 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const selectors = [
+    ".article-editor-actor-toggle__dropdown > button.artdeco-dropdown__trigger",
+    "button.artdeco-dropdown__trigger.article-editor-actor-toggle__trigger",
+    "button.artdeco-dropdown__trigger"
+  ];
+
+  while (Date.now() <= deadline) {
+    for (const selector of selectors) {
+      const button = document.querySelector(selector);
+      if (button instanceof HTMLButtonElement) {
+        return button;
+      }
+    }
+    await sleep(intervalMs);
+  }
+
+  return null;
+}
+
+async function waitForNewsletterOption(newsletterName, { timeoutMs = 2500, intervalMs = 120 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const nameRegex = new RegExp(newsletterName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+
+  while (Date.now() <= deadline) {
+    const dropdowns = document.querySelectorAll(".article-editor-actor-toggle__dropdown .artdeco-dropdown__content, .article-editor-actor-toggle__dropdown .artdeco-dropdown__content-inner");
+    for (const dropdown of dropdowns) {
+      if (!(dropdown instanceof HTMLElement) || dropdown.offsetParent === null) {
+        continue;
+      }
+
+      const buttons = dropdown.querySelectorAll("button, .artdeco-dropdown__item");
+      for (const candidate of buttons) {
+        const text = (candidate.textContent || "").trim();
+        if (text && nameRegex.test(text)) {
+          return candidate instanceof HTMLElement ? candidate : null;
+        }
+      }
+    }
+
+    await sleep(intervalMs);
+  }
+
+  return null;
+}
+
+async function verifyNewsletterSelection(newsletterName, { timeoutMs = 1600, intervalMs = 120 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const nameRegex = new RegExp(newsletterName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+
+  while (Date.now() <= deadline) {
+    const dropdown = document.querySelector(".article-editor-actor-toggle__dropdown");
+    if (dropdown instanceof HTMLElement) {
+      const subtitle = dropdown.querySelector(".article-editor-actor-toggle__author-subtitle, .article-editor-actor-toggle__author-lockup-subtitle");
+      if (subtitle) {
+        const text = (subtitle.textContent || "").trim();
+        if (text && nameRegex.test(text)) {
+          return true;
+        }
+      }
+    }
+
+    await sleep(intervalMs);
+  }
+
+  return false;
 }
 
 async function waitForBodyField(maxAttempts = DEFAULT_WAIT_ATTEMPTS, delayMs = DEFAULT_WAIT_DELAY_MS) {
