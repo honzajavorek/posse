@@ -16,7 +16,6 @@ const logStep = (step, detail = "", level = "info") => {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const nextFrame = () => new Promise((resolve) => {
   if (typeof requestAnimationFrame === "function") {
     requestAnimationFrame(() => resolve());
@@ -156,6 +155,58 @@ function ensureElementInView(element) {
   } catch (error) {
     // Ignore scrolling issues.
   }
+}
+
+function isButtonDisabled(button) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return true;
+  }
+
+  const disabledAttr = button.hasAttribute("disabled") || button.getAttribute("aria-disabled") === "true";
+  const disabledClass = button.classList.contains("artdeco-button--disabled");
+  return button.disabled || disabledAttr || disabledClass;
+}
+
+function isElementVisible(element) {
+  if (!(element instanceof HTMLElement) || !element.isConnected) {
+    return false;
+  }
+  if (element.getAttribute("aria-hidden") === "true") {
+    return false;
+  }
+
+  try {
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      return true;
+    }
+  } catch (error) {
+    // Ignore measurement issues and fall through.
+  }
+
+  const style = window.getComputedStyle ? window.getComputedStyle(element) : null;
+  if (!style) {
+    return false;
+  }
+
+  if (style.opacity === "0" || style.display === "none" || style.visibility === "hidden") {
+    return false;
+  }
+
+  return true;
+}
+
+function escapeHtml(value) {
+  if (typeof value !== "string" || !value) {
+    return "";
+  }
+
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function scrollDocumentToTop({ behavior = "auto" } = {}) {
@@ -336,6 +387,10 @@ function suppressFileDialogTemporarily() {
     } else {
       logStep("Cover staging skipped (no cover image).");
     }
+
+    await waitForDraftSync({ reason: "before share dialog" });
+    await humanPause("before opening share dialog", { minMs: 220, maxMs: 420 });
+    await triggerPublishDialogAndPrefill("Hello");
   } catch (error) {
     logStep("Failed to inject LinkedIn content", error, "error");
   }
@@ -2004,13 +2059,7 @@ async function waitForCoverEditorToClose(modal, { timeoutMs = 6000, intervalMs =
 }
 
 function isCoverButtonDisabled(button) {
-  if (!(button instanceof HTMLButtonElement)) {
-    return true;
-  }
-
-  const disabledAttr = button.hasAttribute("disabled") || button.getAttribute("aria-disabled") === "true";
-  const disabledClass = button.classList.contains("artdeco-button--disabled");
-  return button.disabled || disabledAttr || disabledClass;
+  return isButtonDisabled(button);
 }
 
 function collectCoverQueryScopes(rootOrRoots) {
@@ -2352,4 +2401,268 @@ function maintainBodyContent(html, plainText, { durationMs = 12000 } = {}) {
   setTimeout(() => tryRestoreBody(html, plainText, false), 150);
   setTimeout(() => tryRestoreBody(html, plainText, false), 600);
   setTimeout(() => tryRestoreBody(html, plainText, false), 1400);
+
+}
+
+async function triggerPublishDialogAndPrefill(message = "Hello", { maxAttempts = 2 } = {}) {
+  const finalMessage = typeof message === "string" ? message : "";
+
+  const preExistingDialog = findOpenShareDialog();
+  if (preExistingDialog) {
+    const existingField = findShareDialogMessageField(preExistingDialog);
+    if (existingField) {
+      const applied = applyShareDialogMessage(existingField, finalMessage);
+      if (applied) {
+        await nextFrame();
+        logStep("Share dialog already open; message populated.");
+        return true;
+      }
+    }
+  }
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const button = await waitForPublishButton({ timeoutMs: attempt === 1 ? 8000 : 5000 });
+    if (!button) {
+      if (attempt === maxAttempts) {
+        logStep("Next/Publish navigation button not found for share dialog.", "", "warn");
+      }
+      continue;
+    }
+
+    ensureElementInView(button);
+    logStep(`Activating LinkedIn Next button (attempt ${attempt}).`, describeElement(button));
+    safeActivate(button);
+
+    const messageField = await waitForShareDialogMessageField({ timeoutMs: 7000 });
+    if (!messageField) {
+      logStep("Share dialog text field not detected after clicking Next.", "", "warn");
+      await humanPause("before retrying share dialog open", { minMs: 180, maxMs: 320 });
+      continue;
+    }
+
+    await humanPause("before typing share dialog message", { minMs: 160, maxMs: 320 });
+    const applied = applyShareDialogMessage(messageField, finalMessage);
+    if (!applied) {
+      logStep("Unable to set share dialog message.", "", "warn");
+      return false;
+    }
+
+    await nextFrame();
+    logStep("Share dialog message populated.");
+    return true;
+  }
+
+  logStep("Unable to open share dialog for message staging after retries.", "", "warn");
+  return false;
+}
+
+async function waitForPublishButton({ timeoutMs = 6000, intervalMs = 140 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    const button = findPublishButtonCandidate();
+    if (button && !isButtonDisabled(button)) {
+      return button;
+    }
+    await sleep(intervalMs);
+  }
+
+  return null;
+}
+
+function findPublishButtonCandidate() {
+  const selectors = [
+    "button.article-editor-nav__publish",
+    "button[data-test-article-editor-next-button]",
+    ".article-editor-nav__actions button.artdeco-button--primary"
+  ];
+
+  for (const selector of selectors) {
+    const buttons = document.querySelectorAll(selector);
+    for (const button of buttons) {
+      if (!(button instanceof HTMLButtonElement)) {
+        continue;
+      }
+      if (!button.isConnected) {
+        continue;
+      }
+      if (button.closest(".share-box, .share-box_actions")) {
+        continue;
+      }
+      return button;
+    }
+  }
+
+  const fallbackButtons = document.querySelectorAll(".article-editor-nav button.artdeco-button, .article-editor-nav__actions button.artdeco-button");
+  for (const button of fallbackButtons) {
+    if (!(button instanceof HTMLButtonElement)) {
+      continue;
+    }
+    if (button.closest(".share-box, .share-box_actions")) {
+      continue;
+    }
+    const text = (button.textContent || "").trim().toLowerCase();
+    if (text === "next" || text === "publish") {
+      return button;
+    }
+  }
+
+  return null;
+}
+
+async function waitForShareDialogMessageField({ timeoutMs = 6000, intervalMs = 140 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    const dialog = findOpenShareDialog();
+    if (dialog) {
+      const field = findShareDialogMessageField(dialog);
+      if (field) {
+        return field;
+      }
+    }
+    await sleep(intervalMs);
+  }
+
+  return null;
+}
+
+function findOpenShareDialog() {
+  const shareBoxes = document.querySelectorAll(".share-box");
+  for (const shareBox of shareBoxes) {
+    if (shareBox instanceof HTMLElement && isElementVisible(shareBox) && !shareBox.closest('.artdeco-modal[aria-hidden="true"]')) {
+      return shareBox;
+    }
+  }
+
+  const modals = document.querySelectorAll(".artdeco-modal");
+  for (const modal of modals) {
+    if (!(modal instanceof HTMLElement) || modal.getAttribute("aria-hidden") === "true") {
+      continue;
+    }
+    if (!isElementVisible(modal)) {
+      continue;
+    }
+    const shareBox = modal.querySelector(".share-box, .share-creation-state");
+    if (shareBox instanceof HTMLElement && isElementVisible(shareBox)) {
+      return shareBox;
+    }
+  }
+
+  const shareStates = document.querySelectorAll(".share-creation-state");
+  for (const state of shareStates) {
+    if (state instanceof HTMLElement && isElementVisible(state)) {
+      return state;
+    }
+  }
+
+  return null;
+}
+
+function findShareDialogMessageField(root) {
+  if (!(root instanceof HTMLElement)) {
+    return null;
+  }
+
+  const selectors = [
+    ".share-creation-state__text-editor .ql-editor[contenteditable=\"true\"]",
+    ".ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
+    "[role=\"textbox\"][contenteditable=\"true\"]",
+    "textarea"
+  ];
+
+  for (const selector of selectors) {
+    const candidates = root.querySelectorAll(selector);
+    for (const candidate of candidates) {
+      if (candidate instanceof HTMLTextAreaElement) {
+        if (candidate.closest(".share-box, .share-creation-state") && isElementVisible(candidate)) {
+          return candidate;
+        }
+        continue;
+      }
+
+      if (candidate instanceof HTMLElement) {
+        if (candidate.closest(".share-box, .share-creation-state") && isElementVisible(candidate) && candidate.getAttribute("contenteditable") === "true") {
+          return candidate;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function applyShareDialogMessage(target, message) {
+  const finalMessage = typeof message === "string" ? message.trim() : "";
+
+  if (!target || !target.isConnected) {
+    return false;
+  }
+
+  if (target instanceof HTMLTextAreaElement) {
+    const currentValue = (target.value || "").trim();
+    if (currentValue === finalMessage) {
+      return true;
+    }
+    setTextControlValue(target, finalMessage);
+    return (target.value || "").trim() === finalMessage;
+  }
+
+  if (target instanceof HTMLElement && target.getAttribute("contenteditable") === "true") {
+    const currentText = (target.textContent || "").trim();
+    if (currentText === finalMessage) {
+      return true;
+    }
+
+    try {
+      target.focus({ preventScroll: false });
+    } catch (error) {
+      try {
+        target.focus();
+      } catch (focusError) {
+        // Ignore focus issues.
+      }
+    }
+
+    selectAllIn(target);
+    let inserted = false;
+
+    if (typeof document.execCommand === "function") {
+      try {
+        inserted = document.execCommand("insertText", false, finalMessage);
+      } catch (error) {
+        inserted = false;
+      }
+
+      if (!inserted) {
+        try {
+          inserted = document.execCommand("insertHTML", false, `<p>${escapeHtml(finalMessage)}</p>`);
+        } catch (error) {
+          inserted = false;
+        }
+      }
+    }
+
+    if (!inserted) {
+      target.innerHTML = `<p>${escapeHtml(finalMessage)}</p>`;
+    }
+
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+    try {
+      target.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        cancelable: true,
+        data: finalMessage,
+        inputType: "insertText"
+      }));
+    } catch (error) {
+      // Ignore inability to construct InputEvent.
+    }
+    target.dispatchEvent(new Event("change", { bubbles: true }));
+
+    const updatedText = (target.textContent || "").trim();
+    return updatedText === finalMessage;
+  }
+
+  return false;
 }
