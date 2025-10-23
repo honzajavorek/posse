@@ -47,8 +47,14 @@ function waitForComposer(maxAttempts = 30, delayMs = 250) {
 
 function stageMessage(element, message) {
   focusComposer(element);
-  clearComposer(element);
-  insertMessage(element, message);
+  const inserted = replaceComposerContent(element, message);
+
+  if (!inserted) {
+    element.textContent = message;
+  }
+
+  collapseSelectionToEnd(element);
+
   element.dispatchEvent(new InputEvent("input", {
     bubbles: true,
     cancelable: true,
@@ -62,11 +68,10 @@ function focusComposer(element) {
   element.dispatchEvent(new Event("focus", { bubbles: true }));
 }
 
-function clearComposer(element) {
+function replaceComposerContent(element, message) {
   const selection = window.getSelection();
   if (!selection) {
-    element.textContent = "";
-    return;
+    return false;
   }
 
   selection.removeAllRanges();
@@ -74,9 +79,24 @@ function clearComposer(element) {
   range.selectNodeContents(element);
   selection.addRange(range);
 
-  document.execCommand("delete");
+  const insertedText = document.execCommand("insertText", false, message);
+  if (insertedText) {
+    return true;
+  }
+
+  const insertedHtml = document.execCommand("insertHTML", false, message);
+  return insertedHtml;
 }
 
-function insertMessage(element, message) {
-  element.textContent = message;
+function collapseSelectionToEnd(element) {
+  const selection = window.getSelection();
+  if (!selection) {
+    return;
+  }
+
+  selection.removeAllRanges();
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(false);
+  selection.addRange(range);
 }
