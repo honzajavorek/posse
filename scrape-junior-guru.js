@@ -279,6 +279,57 @@
     });
   }
 
+  function convertDateParagraphLists(root) {
+    if (!root || typeof root.querySelectorAll !== "function") {
+      return;
+    }
+
+    const datePattern = /^\s*(<strong>\s*)?\d{1,2}\.\d{1,2}\.?(\s|&nbsp;|<|$)/i;
+    const paragraphs = Array.from(root.querySelectorAll("p"));
+    let sequence = [];
+
+    function flushSequence() {
+      if (sequence.length < 2) {
+        sequence = [];
+        return;
+      }
+
+      const listParent = sequence[0].parentNode;
+      if (!listParent) {
+        sequence = [];
+        return;
+      }
+
+      const ul = document.createElement("ul");
+
+      sequence.forEach((paragraph) => {
+        const li = document.createElement("li");
+        li.innerHTML = paragraph.innerHTML;
+        ul.appendChild(li);
+      });
+
+      listParent.insertBefore(ul, sequence[0]);
+      sequence.forEach((paragraph) => {
+        if (paragraph.parentNode) {
+          paragraph.parentNode.removeChild(paragraph);
+        }
+      });
+
+      sequence = [];
+    }
+
+    paragraphs.forEach((paragraph) => {
+      const html = paragraph.innerHTML || "";
+      if (datePattern.test(html.trim())) {
+        sequence.push(paragraph);
+      } else {
+        flushSequence();
+      }
+    });
+
+    flushSequence();
+  }
+
   function buildBodyHtml(issueElement) {
     const clone = issueElement.cloneNode(true);
     sanitizeClone(clone);
@@ -286,6 +337,7 @@
 
     clone.querySelectorAll('.newsletter-issue-date').forEach((node) => node.remove());
     convertBulletCharacterLists(clone);
+    convertDateParagraphLists(clone);
 
     return clone.innerHTML;
   }
