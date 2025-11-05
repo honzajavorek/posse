@@ -279,6 +279,65 @@
     });
   }
 
+  function convertChartBlocks(root) {
+    if (!root || typeof root.querySelectorAll !== "function") {
+      return;
+    }
+
+    const chartSelector = [
+      "p",
+      "div",
+      "section",
+      "article",
+      "aside",
+      "blockquote",
+      "td",
+      "th"
+    ].join(",");
+  const lineRegex = /^🟨{2,}/u;
+
+    Array.from(root.querySelectorAll(chartSelector)).forEach((element) => {
+      if (!element) {
+        return;
+      }
+
+      const rawText = element.textContent || "";
+      const normalizedCheck = rawText.replace(/\uFE0F/g, "");
+      if (!normalizedCheck.includes("🟨🟨")) {
+        return;
+      }
+
+      const normalizedHtml = element.innerHTML
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/&nbsp;/gi, " ");
+      const lines = normalizedHtml
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      if (lines.length < 2) {
+        return;
+      }
+
+      const allSquares = lines.every((line) => lineRegex.test(line.replace(/\uFE0F/g, "")));
+      if (!allSquares) {
+        return;
+      }
+
+  const pre = document.createElement("pre");
+  pre.className = "article-editor-code-block";
+  pre.setAttribute("data-test-code-block", "true");
+
+  const code = document.createElement("code");
+  code.textContent = lines.join("\n");
+  pre.appendChild(code);
+
+      if (element.parentNode) {
+        element.parentNode.replaceChild(pre, element);
+      }
+    });
+  }
+
   function convertDateParagraphLists(root) {
     if (!root || typeof root.querySelectorAll !== "function") {
       return;
@@ -338,6 +397,10 @@
     clone.querySelectorAll('.newsletter-issue-date').forEach((node) => node.remove());
     convertBulletCharacterLists(clone);
     convertDateParagraphLists(clone);
+    convertChartBlocks(clone);
+
+    const preDebugCount = clone.querySelectorAll('pre').length;
+    console.info(`POSSE: Chart block count in newsletter clone: ${preDebugCount}`);
 
     return clone.innerHTML;
   }

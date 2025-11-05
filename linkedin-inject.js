@@ -322,8 +322,11 @@ function suppressFileDialogTemporarily() {
 
     const preferredTitle = response.title || response.sourceUrl || "";
   const preparedBodyHtml = resolveBodyHtml(response.bodyHtml || "", response.sourceUrl || "");
-  const preparedBodyText = extractPlainText(preparedBodyHtml);
-  const preparedShareMessage = resolveShareMessage(response);
+  const inboundCodeBlocks = countPreCodeBlocks(preparedBodyHtml);
+  logStep(`Prepared body markup with ${inboundCodeBlocks} <pre> block(s).`);
+  const stagedBodyHtml = preparedBodyHtml;
+  const preparedBodyText = extractPlainText(stagedBodyHtml);
+    const preparedShareMessage = resolveShareMessage(response);
     const coverImage = response.coverImage || null;
     const newsletterName = resolveNewsletterName(response.sourceUrl || "");
 
@@ -339,7 +342,7 @@ function suppressFileDialogTemporarily() {
       logStep("Newsletter selection skipped (no matching newsletter).");
     }
 
-    if (!preparedBodyHtml) {
+    if (!stagedBodyHtml) {
       logStep("No body content available, skipping body injection.", "", "warn");
       return;
     }
@@ -355,14 +358,19 @@ function suppressFileDialogTemporarily() {
 
     await humanPause("before staging body content");
 
-    const injected = await stageBody(hydratedBodyField, preparedBodyHtml, preparedBodyText, true);
+    const injected = await stageBody(hydratedBodyField, stagedBodyHtml, preparedBodyText, true);
 
     if (!injected) {
       logStep("LinkedIn body editor rejected injected content.", "", "warn");
       return;
     }
 
-    maintainBodyContent(preparedBodyHtml, preparedBodyText);
+    const finalBodyHtmlSnapshot = captureBodyHtml(hydratedBodyField);
+    const finalCodeBlocks = countPreCodeBlocks(finalBodyHtmlSnapshot);
+    logStep(`Body editor currently contains ${finalCodeBlocks} <pre> block(s) after staging.`);
+    const finalBodyPlainTextSnapshot = extractPlainText(finalBodyHtmlSnapshot);
+
+    maintainBodyContent(finalBodyHtmlSnapshot, finalBodyPlainTextSnapshot);
     logStep("Body content staged and maintenance watcher active.");
 
     const cursorPositioned = positionBodyCursorAtStart(hydratedBodyField);
@@ -2354,6 +2362,31 @@ function extractPlainText(html) {
   scratch.innerHTML = html;
   const text = scratch.textContent || "";
   return text.trim();
+}
+
+function captureBodyHtml(field) {
+  if (!(field instanceof HTMLElement) || !field.isConnected) {
+    return "";
+  }
+  return field.innerHTML;
+}
+
+function countPreCodeBlocks(htmlOrElement) {
+  if (!htmlOrElement) {
+    return 0;
+  }
+
+  if (typeof htmlOrElement === "string") {
+    const scratch = document.createElement("div");
+    scratch.innerHTML = htmlOrElement;
+    return scratch.querySelectorAll("pre").length;
+  }
+
+  if (htmlOrElement instanceof HTMLElement) {
+    return htmlOrElement.querySelectorAll("pre").length;
+  }
+
+  return 0;
 }
 
 function maintainBodyContent(html, plainText, { durationMs = 12000 } = {}) {
