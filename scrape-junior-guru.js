@@ -337,6 +337,22 @@
       }
     });
   }
+    function injectSubscriptionBlockquote(root) {
+      if (!root || typeof root.querySelector !== "function") {
+        return;
+      }
+
+      const firstParagraph = root.querySelector('p');
+      if (!firstParagraph || !firstParagraph.parentNode) {
+        return;
+      }
+
+      const blockquote = document.createElement('blockquote');
+      blockquote.innerHTML = '<strong>Baví tě tyhle novinky a chceš si je číst pravidelně?</strong> Nespoléhej se na algoritmus LinkedInu! Jdi na <a href="https://junior.guru/news">junior.guru/news</a> a přihlaš se k odebírání e-mailem. Najdeš tam i archiv všech starších vydání.';
+
+      firstParagraph.parentNode.replaceChild(blockquote, firstParagraph);
+    }
+
 
   function convertDateParagraphLists(root) {
     if (!root || typeof root.querySelectorAll !== "function") {
@@ -389,12 +405,13 @@
     flushSequence();
   }
 
-  function buildBodyHtml(issueElement) {
+  function buildBodyHtml(issueElement, context = {}) {
     const clone = issueElement.cloneNode(true);
     sanitizeClone(clone);
     removeCommentNodes(clone);
 
     clone.querySelectorAll('.newsletter-issue-date').forEach((node) => node.remove());
+  injectSubscriptionBlockquote(clone);
     convertBulletCharacterLists(clone);
     convertDateParagraphLists(clone);
     convertChartBlocks(clone);
@@ -402,7 +419,28 @@
     const preDebugCount = clone.querySelectorAll('pre').length;
     console.info(`POSSE: Chart block count in newsletter clone: ${preDebugCount}`);
 
+    appendOriginalLinkBlockquote(clone, context);
+
     return clone.innerHTML;
+  }
+
+  function appendOriginalLinkBlockquote(root, context = {}) {
+    if (!root || typeof root.appendChild !== "function") {
+      return;
+    }
+
+    const container = root;
+    const url = typeof context.canonicalUrl === "string" ? context.canonicalUrl : "";
+    const title = typeof context.articleTitle === "string" ? context.articleTitle : "";
+
+    if (!url || !title) {
+      return;
+    }
+
+    const blockquote = document.createElement('blockquote');
+    blockquote.innerHTML = `Newsletter si můžeš přečíst i přímo na webu, v jeho původní podobě: <a href="${url}">${title}</a>`;
+
+    container.appendChild(blockquote);
   }
 
   function fetchImageAsDataUrl(absoluteUrl) {
@@ -492,7 +530,10 @@
   const canonicalUrl = getCanonicalUrl();
   const metaDescription = getMetaDescription();
   const ogImageUrl = getOgImageUrl();
-  const bodyHtml = buildBodyHtml(issueElement);
+  const bodyHtml = buildBodyHtml(issueElement, {
+    canonicalUrl,
+    articleTitle
+  });
   const coverImage = buildCoverImage(ogImageUrl, issueDateText, articleTitle);
 
   return {

@@ -234,6 +234,21 @@
     }
   }
 
+  function appendOriginalLinkFooter(root, url, title) {
+    if (!root || typeof root.appendChild !== "function") {
+      return;
+    }
+
+    if (!url || !title) {
+      return;
+    }
+
+    const blockquote = document.createElement('blockquote');
+    blockquote.innerHTML = `Článek si můžeš přečíst i přímo na webu, v jeho původní podobě: <a href="${url}">${title}</a>`;
+
+    root.appendChild(blockquote);
+  }
+
   function stripLinksFromFigureCaptions(clone) {
     const captions = clone.querySelectorAll('figcaption');
     captions.forEach((caption) => {
@@ -409,6 +424,9 @@
   const articleBody = getArticleBody(articleElement);
   const articleClone = articleBody.cloneNode(true);
   const coverImageUrlAbsolute = getOgImageUrl();
+  const articleTitle = getArticleTitle(articleElement);
+  const canonicalUrl = getCanonicalUrl();
+  const metaDescription = getMetaDescription();
 
   sanitizeClone(articleClone);
   insertLinkedinSubscriptionCallout(articleClone, coverImageUrlAbsolute);
@@ -417,11 +435,13 @@
 
   const coverImage = extractCoverImage(articleBody, articleClone, coverImageUrlAbsolute);
 
+  appendOriginalLinkFooter(articleClone, canonicalUrl, articleTitle);
+
   return {
-    url: getCanonicalUrl(),
-    title: getArticleTitle(articleElement),
+    url: canonicalUrl,
+    title: articleTitle,
     bodyHtml: articleClone.innerHTML,
     coverImage,
-    metaDescription: getMetaDescription()
+    metaDescription
   };
 })();
