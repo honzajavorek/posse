@@ -228,12 +228,64 @@
     clone.querySelectorAll('img[srcset]').forEach((node) => absolutizeSrcset(node));
   }
 
+  function convertBulletCharacterLists(root) {
+    if (!root || typeof root.querySelectorAll !== "function") {
+      return;
+    }
+
+    const bulletChar = "▪️";
+    const blockSelector = [
+      "p",
+      "div",
+      "section",
+      "article",
+      "aside",
+      "blockquote",
+      "td",
+      "th"
+    ].join(",");
+
+    Array.from(root.querySelectorAll(blockSelector)).forEach((element) => {
+      if (!element || !element.innerHTML || !element.innerHTML.includes(bulletChar)) {
+        return;
+      }
+
+      const parts = element.innerHTML.split(bulletChar)
+        .map((part) => part.replace(/&nbsp;/gi, " "))
+        .map((part) => part.replace(/^(<br\s*\/?>)+/gi, ""))
+        .map((part) => part.replace(/(<br\s*\/?>)+$/gi, ""))
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0);
+
+      if (!parts.length) {
+        return;
+      }
+
+      const replacement = document.createElement("ul");
+      if (element.id) {
+        replacement.id = element.id;
+      }
+      if (element.className) {
+        replacement.className = element.className;
+      }
+
+      parts.forEach((part) => {
+        const li = document.createElement("li");
+        li.innerHTML = part;
+        replacement.appendChild(li);
+      });
+
+      element.parentNode.replaceChild(replacement, element);
+    });
+  }
+
   function buildBodyHtml(issueElement) {
     const clone = issueElement.cloneNode(true);
     sanitizeClone(clone);
     removeCommentNodes(clone);
 
     clone.querySelectorAll('.newsletter-issue-date').forEach((node) => node.remove());
+    convertBulletCharacterLists(clone);
 
     return clone.innerHTML;
   }
