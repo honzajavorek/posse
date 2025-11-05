@@ -350,7 +350,12 @@
       const blockquote = document.createElement('blockquote');
       blockquote.innerHTML = '<strong>Baví tě tyhle novinky a chceš si je číst pravidelně?</strong> Nespoléhej se na algoritmus LinkedInu! Jdi na <a href="https://junior.guru/news">junior.guru/news</a> a přihlaš se k odebírání e-mailem. Najdeš tam i archiv všech starších vydání.';
 
-      firstParagraph.parentNode.replaceChild(blockquote, firstParagraph);
+      const parent = firstParagraph.parentNode;
+      if (firstParagraph.nextSibling) {
+        parent.insertBefore(blockquote, firstParagraph.nextSibling);
+      } else {
+        parent.appendChild(blockquote);
+      }
     }
 
 
@@ -437,9 +442,11 @@
       return;
     }
 
+    const hr = document.createElement('hr');
     const blockquote = document.createElement('blockquote');
     blockquote.innerHTML = `Newsletter si můžeš přečíst i přímo na webu, v jeho původní podobě: <a href="${url}">${title}</a>`;
 
+    container.appendChild(hr);
     container.appendChild(blockquote);
   }
 

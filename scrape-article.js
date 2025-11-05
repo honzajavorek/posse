@@ -243,9 +243,11 @@
       return;
     }
 
+    const hr = document.createElement('hr');
     const blockquote = document.createElement('blockquote');
     blockquote.innerHTML = `Článek si můžeš přečíst i přímo na webu, v jeho původní podobě: <a href="${url}">${title}</a>`;
 
+    root.appendChild(hr);
     root.appendChild(blockquote);
   }
 
