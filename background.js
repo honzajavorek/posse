@@ -2,11 +2,27 @@ const browserApi = browser;
 
 const TARGET_DISCORD_URL = "https://discord.com/channels/769966886598737931/1075091413454303272";
 const TARGET_LINKEDIN_URL = "https://www.linkedin.com/article/new/";
-const SUPPORTED_SOURCE_HOSTNAME = "honzajavorek.cz";
-const SUPPORTED_SOURCE_PATH_PREFIX = "/blog/";
-const UNSUPPORTED_PAGE_MESSAGE = "POSSE currently supports only articles on https://honzajavorek.cz/blog/.";
 
-function ensureSupportedSourceUrl(urlString) {
+const SOURCES = [
+  {
+    id: "personal-blog",
+    hostname: "honzajavorek.cz",
+    pathPrefix: "/blog/",
+    scrapeScript: "scrape-article.js",
+    openDiscord: true
+  },
+  {
+    id: "junior-guru-news",
+    hostname: "junior.guru",
+    pathPrefix: "/news/",
+    scrapeScript: "scrape-junior-guru.js",
+    openDiscord: false
+  }
+];
+
+const UNSUPPORTED_PAGE_MESSAGE = "POSSE currently supports articles on https://honzajavorek.cz/blog/ and https://junior.guru/news/.";
+
+function resolveSourceDetails(urlString) {
   if (!urlString) {
     const error = new Error(UNSUPPORTED_PAGE_MESSAGE);
     error.name = "POSSEUnsupportedSource";
@@ -22,13 +38,17 @@ function ensureSupportedSourceUrl(urlString) {
     throw error;
   }
 
-  if (parsed.hostname !== SUPPORTED_SOURCE_HOSTNAME || !parsed.pathname.startsWith(SUPPORTED_SOURCE_PATH_PREFIX)) {
+  const config = SOURCES.find((source) => (
+    parsed.hostname === source.hostname && parsed.pathname.startsWith(source.pathPrefix)
+  ));
+
+  if (!config) {
     const error = new Error(UNSUPPORTED_PAGE_MESSAGE);
     error.name = "POSSEUnsupportedSource";
     throw error;
   }
 
-  return parsed;
+  return { parsed, config };
 }
 
 async function notifyUnsupportedPage(tabId) {
@@ -54,19 +74,22 @@ browserApi.browserAction.onClicked.addListener(async (activeTab) => {
       ? await browserApi.tabs.get(activeTab.id)
       : activeTab;
 
+    let sourceDetails;
     try {
-      ensureSupportedSourceUrl(tabDetails ? tabDetails.url : undefined);
+      sourceDetails = resolveSourceDetails(tabDetails ? tabDetails.url : undefined);
     } catch (validationError) {
       await notifyUnsupportedPage(tabDetails && typeof tabDetails.id === "number" ? tabDetails.id : undefined);
       throw validationError;
     }
 
-  let scraped = { url: tabDetails ? tabDetails.url : undefined, title: tabDetails ? tabDetails.title : undefined, bodyHtml: "", coverImage: null, metaDescription: "" };
+    const { config } = sourceDetails;
+
+    let scraped = { url: tabDetails ? tabDetails.url : undefined, title: tabDetails ? tabDetails.title : undefined, bodyHtml: "", coverImage: null, metaDescription: "" };
 
     if (tabDetails && typeof tabDetails.id === "number") {
       try {
         const [result] = await browserApi.tabs.executeScript(tabDetails.id, {
-          file: "scrape-article.js"
+          file: config.scrapeScript
         });
 
         if (result && typeof result === "object") {
@@ -107,29 +130,34 @@ browserApi.browserAction.onClicked.addListener(async (activeTab) => {
       sourceTitle: sourceTitle || "",
       bodyHtml: scraped.bodyHtml || "",
       coverImage: scraped.coverImage || null,
-      metaDescription: scraped.metaDescription || ""
+      metaDescription: scraped.metaDescription || "",
+      originId: config.id
     };
 
-    const discordTab = await browserApi.tabs.create({
-      url: TARGET_DISCORD_URL,
-      active: true
-    });
+    if (config.openDiscord) {
+      const discordTab = await browserApi.tabs.create({
+        url: TARGET_DISCORD_URL,
+        active: true
+      });
 
-    pendingTasks.set(discordTab.id, {
-      type: "discord",
-      payload: metadata,
-      createdAt: Date.now()
-    });
+      pendingTasks.set(discordTab.id, {
+        type: "discord",
+        payload: metadata,
+        createdAt: Date.now(),
+        originId: config.id
+      });
+    }
 
     const linkedinTab = await browserApi.tabs.create({
       url: TARGET_LINKEDIN_URL,
-      active: false
+      active: !config.openDiscord
     });
 
     pendingTasks.set(linkedinTab.id, {
       type: "linkedin",
       payload: metadata,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      originId: config.id
     });
   } catch (error) {
     if (error && error.name === "POSSEUnsupportedSource") {
@@ -185,7 +213,8 @@ browserApi.runtime.onMessage.addListener((message, sender) => {
 
     return Promise.resolve({
       success: true,
-      postUrl: details.payload.sourceUrl
+      postUrl: details.payload.sourceUrl,
+      originId: details.originId || details.payload.originId || null
     });
   }
 
@@ -204,7 +233,8 @@ browserApi.runtime.onMessage.addListener((message, sender) => {
       sourceUrl: details.payload.sourceUrl || "",
       bodyHtml: details.payload.bodyHtml || "",
       coverImage: details.payload.coverImage || null,
-      metaDescription: details.payload.metaDescription || ""
+      metaDescription: details.payload.metaDescription || "",
+      originId: details.originId || details.payload.originId || null
     });
   }
 

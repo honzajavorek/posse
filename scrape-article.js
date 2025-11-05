@@ -1,7 +1,7 @@
 (() => {
   const SUPPORTED_SOURCE_HOSTNAME = "honzajavorek.cz";
   const SUPPORTED_SOURCE_PATH_PREFIX = "/blog/";
-  const UNSUPPORTED_PAGE_MESSAGE = "POSSE currently supports only articles on https://honzajavorek.cz/blog/.";
+  const UNSUPPORTED_PAGE_MESSAGE = "POSSE currently supports articles on https://honzajavorek.cz/blog/ and https://junior.guru/news/.";
 
   function ensureBlogUrl(urlString) {
     if (!urlString) {

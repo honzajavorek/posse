@@ -413,6 +413,11 @@ function resolveNewsletterName(sourceUrl) {
       return null;
     }
     const parsed = new URL(sourceUrl);
+    if (parsed.hostname && parsed.hostname.includes("junior.guru")) {
+      if (!parsed.pathname || parsed.pathname.startsWith("/news/")) {
+        return "Novinky z junior.guru";
+      }
+    }
     if (parsed.hostname && parsed.hostname.includes("honzajavorek.cz")) {
       return "Javorové lístky";
     }
